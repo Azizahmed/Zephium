@@ -426,14 +426,19 @@ impl Overlay {
         }
         self.publish();
         if !snapshot.visible {
-            if visible(&self.window) {
+            if shown(&self.window) {
                 self.tell_browser("launcher.dismissed");
             }
             do_hide(&self.window);
             return;
         }
+        // On macOS the window stays up through its fade-out, so a launcher
+        // called back inside it arrives without ever having been ordered out.
+        let arriving = !shown(&self.window);
         if !visible(&self.window) {
             self.place();
+        }
+        if arriving {
             self.tell_browser("launcher.presented");
         }
         #[cfg(target_os = "macos")]
@@ -850,6 +855,20 @@ fn visible(window: &WebviewWindow) -> bool {
     #[cfg(not(target_os = "macos"))]
     {
         window.is_visible().unwrap_or(false)
+    }
+}
+
+/// Whether the launcher is up and not on its way out, which on macOS is
+/// shorter than the window being visible.
+fn shown(window: &WebviewWindow) -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        let _ = window;
+        crate::panel::is_shown()
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        visible(window)
     }
 }
 

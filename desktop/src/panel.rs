@@ -279,6 +279,12 @@ pub fn is_visible(window: &WebviewWindow) -> bool {
     visible
 }
 
+/// Whether the launcher is on screen or arriving. Unlike `is_visible` this is
+/// false through the fade-out, when the window is still up but already away.
+pub fn is_shown() -> bool {
+    SHOWN.get()
+}
+
 /// The usable area of a display, in points and AppKit's bottom-up screen
 /// coordinates, which are the ones the pointer, every screen and the window's
 /// frame already speak. Placement stays in them end to end, so displays of
