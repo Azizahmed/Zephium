@@ -259,6 +259,7 @@
       menu = !menu && actions.length > 0;
       return;
     }
+    const menuOpen = menu;
     if (menu) {
       // The sheet owns navigation while it is open; anything else puts it
       // away and falls through to the field.
@@ -270,6 +271,13 @@
       if (event.key === "ArrowDown" || event.key === "ArrowUp" || event.key === "Enter") return;
       menu = false;
     }
+    // Like Spotlight, Tab does not take the keyboard out of the field.
+    if (event.key === "Tab" && !menuOpen && event.target === input) {
+      event.preventDefault();
+      return;
+    }
+    // A focused button activates itself instead of running the field's row.
+    if (event.key === "Enter" && event.target instanceof HTMLButtonElement) return;
     const numbered = mod && !event.shiftKey && !event.altKey ? Number(key) : NaN;
     if (numbered >= 1 && numbered <= destinations.length) {
       event.preventDefault();
@@ -333,6 +341,9 @@
   class:entering
   onpointerdown={(event) => {
     if (event.target === event.currentTarget) onDismiss();
+    // A press anywhere but the field itself leaves the caret in it.
+    else if (event.pointerType !== "touch" && !(event.target as Element).closest("input"))
+      event.preventDefault();
   }}
   data-layout={detached ? "detached" : "fused"}
   data-native-clip={nativeClip}

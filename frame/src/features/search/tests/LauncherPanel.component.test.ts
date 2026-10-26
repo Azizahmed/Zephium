@@ -563,3 +563,29 @@ test("an Enter that commits a composition does not run the row", async () => {
   await userEvent.keyboard("{Enter}");
   await vi.waitFor(() => expect(native.run).toHaveBeenCalledOnce());
 });
+
+test("a press anywhere in the launcher but the field leaves the caret in it", async () => {
+  const screen = await render(LauncherPanel, { props: { context, destinations } });
+  const field = screen.getByRole("combobox");
+  const input = field.element();
+  await field.fill("zzz");
+  await reply("zzz", []);
+  await expect.element(screen.getByText("No matching results").first()).toBeVisible();
+  for (const target of [".lead", ".empty", "footer"]) {
+    await userEvent.click(screen.container.querySelector<HTMLElement>(target)!);
+    expect(document.activeElement, target).toBe(input);
+  }
+});
+
+test("Tab stays in the field, and Return on a focused chip presses the chip", async () => {
+  const onTool = vi.fn();
+  const screen = await render(LauncherPanel, { props: { context, destinations, onTool } });
+  const input = screen.getByRole("combobox").element() as HTMLInputElement;
+  input.focus();
+  await userEvent.tab();
+  expect(document.activeElement).toBe(input);
+  (screen.getByRole("button", { name: "Tasks" }).element() as HTMLElement).focus();
+  await userEvent.keyboard("{Enter}");
+  expect(onTool).toHaveBeenCalledExactlyOnceWith("tasks");
+  expect(native.run).not.toHaveBeenCalled();
+});
