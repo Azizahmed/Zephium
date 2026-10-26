@@ -1,6 +1,7 @@
 //! A native caption revealed by translating page containers without reflow.
-//! A cached alpha surface exposes the owner's acrylic. Native buttons retain
-//! keyboard/accessibility behavior on a separate, nearly transparent input host.
+//! A cached alpha surface exposes the owner's backdrop material. Native buttons
+//! retain keyboard/accessibility behavior on a separate, nearly transparent
+//! input host.
 #[path = "windows_caption_paint.rs"]
 mod paint;
 use tauri::WebviewWindow;
