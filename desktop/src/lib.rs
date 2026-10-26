@@ -7362,6 +7362,7 @@ pub fn run() {
                     .into());
                 }
                 material::install(&panel_window, true);
+                overlay::fit_to_shapes(&panel_window);
             }
             #[cfg(target_os = "windows")]
             {
