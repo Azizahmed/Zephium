@@ -613,6 +613,9 @@ pub enum Command {
     CancelSearch {
         session_id: String,
     },
+    /// The launcher's page has just loaded, so it holds none of the icon
+    /// rasters it was sent before.
+    PanelLoaded,
     RunSearchAction {
         context: Box<zephium_ipc::SearchContext>,
         action: zephium_ipc::SearchAction,

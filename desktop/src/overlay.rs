@@ -184,6 +184,11 @@ impl Overlay {
     }
     pub fn ready(&self) -> PanelState {
         self.state().model.ready = true;
+        // Every load of the page reports here, and a page just loaded holds
+        // none of the icons it was sent before.
+        if let Some(shell) = self.window.app_handle().try_state::<zephium_app::Handle>() {
+            shell.dispatch(zephium_app::Command::PanelLoaded);
+        }
         self.on_main(|this| this.present());
         self.snapshot()
     }

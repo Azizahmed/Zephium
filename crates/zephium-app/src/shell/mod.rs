@@ -1232,6 +1232,9 @@ impl Shell {
             } => self.search_additional(*context, query, results),
             Command::SearchScoped { query, context } => self.search_scoped(&query, *context),
             Command::CancelSearch { session_id } => self.cancel_scoped_search(&session_id),
+            Command::PanelLoaded => {
+                self.forget_delivered_icons(zephium_ipc::IconSurface::Panel);
+            }
             Command::RunSearchAction {
                 context,
                 action,
