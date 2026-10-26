@@ -248,7 +248,10 @@
 
   function keydown(event: KeyboardEvent) {
     commandHeld = IS_MAC ? event.metaKey : event.ctrlKey;
-    if (event.defaultPrevented || surface.composing || event.isComposing) return;
+    // WebKit ends a composition before the keydown that committed it, with
+    // isComposing already false; that key still reports the IME's 229.
+    if (event.defaultPrevented || surface.composing || event.isComposing || event.keyCode === 229)
+      return;
     const mod = IS_MAC ? event.metaKey : event.ctrlKey;
     const key = event.key.toLowerCase();
     if (mod && key === "k") {

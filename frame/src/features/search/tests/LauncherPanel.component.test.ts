@@ -533,3 +533,33 @@ test("Windows paints one continuous wash while the native clip follows content h
   await vi.waitFor(() => expect(native.layout.mock.calls.at(-1)![0].height).toBeLessThan(300));
   expect(launcher.getBoundingClientRect().height).toBe(600);
 });
+
+test("an Enter that commits a composition does not run the row", async () => {
+  const screen = await render(LauncherPanel, { props: { context, destinations } });
+  const field = screen.getByRole("combobox");
+  const input = field.element() as HTMLInputElement;
+  await field.fill("にほんご");
+  await reply("にほんご", [search("にほんご")]);
+  const asked = native.search.mock.calls.length;
+  // WebKit ends the composition before the keydown that committed it, which
+  // then reports isComposing false and the IME's keyCode 229.
+  input.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+  input.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true, data: input.value }));
+  const commit = new KeyboardEvent("keydown", {
+    key: "Enter",
+    keyCode: 229,
+    bubbles: true,
+    cancelable: true,
+  });
+  input.dispatchEvent(commit);
+  expect(commit.keyCode).toBe(229);
+  expect(commit.isComposing).toBe(false);
+  expect(commit.defaultPrevented).toBe(false);
+  await vi.waitFor(() => expect(native.search.mock.calls.length).toBeGreaterThan(asked));
+  await reply("にほんご", [search("にほんご")]);
+  await new Promise((done) => setTimeout(done, 50));
+  expect(native.run).not.toHaveBeenCalled();
+  // The next Enter is an ordinary one.
+  await userEvent.keyboard("{Enter}");
+  await vi.waitFor(() => expect(native.run).toHaveBeenCalledOnce());
+});

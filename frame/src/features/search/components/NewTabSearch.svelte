@@ -85,7 +85,8 @@
   }
 
   function keydown(event: KeyboardEvent) {
-    if (surface.composing || event.isComposing) return;
+    // See LauncherPanel: WebKit's committing keydown arrives after compositionend.
+    if (surface.composing || event.isComposing || event.keyCode === 229) return;
     if (event.key === "ArrowDown" || event.key === "ArrowUp") {
       event.preventDefault();
       void surface.move(event.key === "ArrowDown" ? 1 : -1);
