@@ -589,3 +589,34 @@ test("Tab stays in the field, and Return on a focused chip presses the chip", as
   expect(onTool).toHaveBeenCalledExactlyOnceWith("tasks");
   expect(native.run).not.toHaveBeenCalled();
 });
+
+test("the field names the actions sheet while it is open, and results are announced", async () => {
+  const screen = await render(LauncherPanel, { props: { context, destinations } });
+  const field = screen.getByRole("combobox");
+  const input = field.element();
+  await field.fill("rust");
+  await reply("rust", [search("rust"), visit("Rust Book", "https://doc.rust-lang.org/book/")]);
+  await expect.element(screen.getByRole("status")).toHaveTextContent("Results: 2");
+  expect(input.getAttribute("aria-haspopup")).toBe("listbox");
+
+  await userEvent.keyboard(`{ArrowDown}{${primary}>}k{/${primary}}`);
+  const menu = screen.getByRole("menu");
+  await expect.element(menu).toBeVisible();
+  const items = [...menu.element().querySelectorAll('[role="menuitem"]')];
+  expect(input.getAttribute("aria-haspopup")).toBe("menu");
+  expect(input.getAttribute("aria-controls")).toBe(menu.element().id);
+  expect(input.getAttribute("aria-expanded")).toBe("true");
+  await vi.waitFor(() => expect(input.getAttribute("aria-activedescendant")).toBe(items[0]!.id));
+  await userEvent.keyboard("{ArrowDown}");
+  await vi.waitFor(() => expect(input.getAttribute("aria-activedescendant")).toBe(items[1]!.id));
+
+  await userEvent.keyboard("{Escape}");
+  await expect.element(screen.getByRole("menu")).not.toBeInTheDocument();
+  expect(input.getAttribute("aria-haspopup")).toBe("listbox");
+  expect(input.getAttribute("aria-controls")).toBe("launcher-results");
+  expect(input.getAttribute("aria-activedescendant")).toBe("launcher-results-option-1");
+
+  await field.fill("zzz");
+  await reply("zzz", []);
+  await expect.element(screen.getByRole("status")).toHaveTextContent("No matching results");
+});

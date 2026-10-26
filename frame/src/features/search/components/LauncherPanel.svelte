@@ -9,7 +9,7 @@
   import { favicons } from "$domain/favicons";
   import { IS_MAC, IS_WINDOWS } from "$shared/platform";
   import ResultList from "./ResultList.svelte";
-  import LauncherActions, { type LauncherAction } from "./LauncherActions.svelte";
+  import LauncherActions, { ACTIONS_ID, type LauncherAction } from "./LauncherActions.svelte";
   import { launcherDestinations } from "../lib/destinations";
   import {
     createSearchSurface,
@@ -72,6 +72,7 @@
   let windowHeight = $state(0);
   let menu = $state(false);
   let menuHeight = $state(0);
+  let menuItem = $state<string>();
   let commandHeld = $state(false);
   /** The launcher is arriving; its content settles in with the glass. */
   let entering = $state(false);
@@ -94,6 +95,13 @@
   );
 
   let home = $derived(!surface.query.trim());
+  let announcement = $derived(
+    surface.empty
+      ? m.panel_no_results()
+      : !home && !surface.pending && surface.rows.length
+        ? m.launcher_results_count({ count: surface.rows.length })
+        : "",
+  );
   let row = $derived(surface.selectedRow);
   let primary = $derived(primaryLabel(row));
   let lead = $derived.by(() => {
@@ -369,14 +377,20 @@
       placeholder={m.panel_search_placeholder()}
       aria-label={m.panel_search_placeholder()}
       role="combobox"
-      aria-controls="launcher-results"
-      aria-expanded={surface.rows.length > 0}
+      aria-haspopup={menu ? "menu" : "listbox"}
+      aria-controls={menu ? ACTIONS_ID : "launcher-results"}
+      aria-expanded={menu || surface.rows.length > 0}
       aria-autocomplete="both"
-      aria-activedescendant={surface.selectedIndex >= 0
-        ? `launcher-results-option-${surface.selectedIndex}`
-        : undefined}
+      aria-activedescendant={menu
+        ? menuItem
+        : surface.selectedIndex >= 0
+          ? `launcher-results-option-${surface.selectedIndex}`
+          : undefined}
     />
   </div>
+  <!-- Rows arrive without the focus moving to them, so a screen reader hears
+       what came back from here. Quiet at home, where nothing was asked. -->
+  <div class="sr-only" role="status">{announcement}</div>
 
   <div class="sheet" style:height={`${sheetHeight}px`} style:margin-top={`${gap}px`}>
     <div class="scroll" style:max-height={`${Math.max(0, sheetMax - FOOTER)}px`}>
@@ -445,6 +459,7 @@
     {#if menu}<LauncherActions
         {actions}
         bind:height={menuHeight}
+        onhighlight={(id) => (menuItem = id)}
         onrun={runAction}
         onclose={() => (menu = false)}
       />{/if}
