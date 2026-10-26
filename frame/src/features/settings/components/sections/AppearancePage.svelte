@@ -45,19 +45,26 @@
     return () => observer.disconnect();
   });
 
-  // What the person may choose here. Windows has one material worth having;
-  // a Mac offers the glass, the older vibrancy, or neither.
-  const materialOptions = IS_WINDOWS
-    ? [
-        { value: "auto", label: m.settings_material_acrylic() },
-        { value: "none", label: m.settings_material_solid() },
-      ]
-    : [
-        { value: "auto", label: m.settings_material_auto() },
-        { value: "liquid_glass", label: m.settings_material_glass() },
-        { value: "vibrancy", label: m.settings_material_vibrancy() },
-        { value: "none", label: m.settings_material_solid() },
-      ];
+  // What the person may choose here. Windows has one material worth having,
+  // Mica, or acrylic on a Windows 10 that lacks it; a Mac offers the glass,
+  // the older vibrancy, or neither.
+  let materialOptions = $derived(
+    IS_WINDOWS
+      ? [
+          {
+            value: "auto",
+            label:
+              material === "acrylic" ? m.settings_material_acrylic() : m.settings_material_mica(),
+          },
+          { value: "none", label: m.settings_material_solid() },
+        ]
+      : [
+          { value: "auto", label: m.settings_material_auto() },
+          { value: "liquid_glass", label: m.settings_material_glass() },
+          { value: "vibrancy", label: m.settings_material_vibrancy() },
+          { value: "none", label: m.settings_material_solid() },
+        ],
+  );
   // A choice the system cannot install right now, such as glass on an older
   // macOS or any material under Reduce Transparency, says what is showing.
   let fallback = $derived.by(() => {

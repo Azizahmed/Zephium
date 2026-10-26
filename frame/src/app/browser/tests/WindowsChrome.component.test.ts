@@ -29,6 +29,8 @@ test("acrylic retains its color wash through the transparent material reset", ()
   const acrylic = getComputedStyle(document.body).backgroundColor;
   expect(acrylic).not.toBe("rgba(0, 0, 0, 0)");
   expect(acrylic).toMatch(/(?:0\.28|28%)/);
+  root.setAttribute("data-material", "mica");
+  expect(getComputedStyle(document.body).backgroundColor).toMatch(/(?:0\.2\b|20%)/);
   root.setAttribute("data-material", "vibrancy");
   expect(getComputedStyle(document.body).backgroundColor).toBe("rgba(0, 0, 0, 0)");
   root.setAttribute("data-material", "none");
