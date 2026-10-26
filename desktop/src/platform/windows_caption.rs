@@ -56,6 +56,8 @@ struct State {
     previous_focus: HWND,
     laying_out: bool,
     hot_button: HWND,
+    // The last button the pointer was on, which outlives the hover itself.
+    last_hot: HWND,
     sizing: bool,
     changing_state: bool,
     opacity: u8,
@@ -159,6 +161,7 @@ pub fn install(window: &WebviewWindow) -> bool {
             previous_focus: HWND::default(),
             laying_out: false,
             hot_button: HWND::default(),
+            last_hot: HWND::default(),
             sizing: false,
             changing_state: false,
             opacity: 0,
@@ -418,6 +421,7 @@ unsafe fn layout(p: *mut State) {
     if !show {
         (*p).expanded = false;
         (*p).opacity = 0;
+        (*p).last_hot = HWND::default();
         (*p).pressed_button = HWND::default();
         (*p).drag_start = None;
         (*p).motion_paused = None;
@@ -580,6 +584,7 @@ unsafe fn prepare_state_change(p: *mut State) {
     (*p).expanded = false;
     (*p).opacity = 0;
     (*p).hot_button = HWND::default();
+    (*p).last_hot = HWND::default();
     (*p).fade_from = 0;
     (*p).pressed_button = HWND::default();
     (*p).drag_start = None;
@@ -597,6 +602,9 @@ unsafe fn transition(p: *mut State, expanded: bool) {
         return;
     }
     (*p).expanded = expanded;
+    if !expanded {
+        (*p).last_hot = HWND::default();
+    }
     let mut enabled = windows::core::BOOL(1);
     let _ = SystemParametersInfoW(
         SPI_GETCLIENTAREAANIMATION,
@@ -733,6 +741,30 @@ unsafe fn show_system_menu(p: *mut State, at: POINT) {
         );
     }
 }
+/// Where the shell's Snap layouts flyout can be: under Maximize and about as
+/// far out to either side as it is deep.
+fn within_snap_reach(point: POINT, maximize: &RECT, reach: i32) -> bool {
+    point.y >= maximize.bottom
+        && point.y < maximize.bottom + reach
+        && point.x >= maximize.left - reach
+        && point.x < maximize.right + reach
+}
+/// Whether the pointer is over a window of another process that is a
+/// top-level one. The WebView's own child windows belong to another process
+/// too, but their top-level ancestor is ours.
+unsafe fn over_foreign_window(point: POINT) -> bool {
+    let hovered = WindowFromPoint(point);
+    if hovered.0.is_null() {
+        return false;
+    }
+    let root = GetAncestor(hovered, GA_ROOT);
+    let mut process = 0u32;
+    GetWindowThreadProcessId(
+        if root.0.is_null() { hovered } else { root },
+        Some(&mut process),
+    );
+    process != 0 && process != std::process::id()
+}
 unsafe fn button_at_cursor(p: *mut State) -> HWND {
     let mut cursor = POINT::default();
     let _ = GetCursorPos(&mut cursor);
@@ -784,6 +816,9 @@ unsafe fn button_at_point(p: *mut State, point: POINT) -> HWND {
 unsafe fn update_hot(p: *mut State, hot: HWND) {
     if (*p).hot_button != hot {
         (*p).hot_button = hot;
+        if !hot.0.is_null() {
+            (*p).last_hot = hot;
+        }
         let _ = render(p);
     }
 }
@@ -1246,6 +1281,16 @@ unsafe extern "system" fn strip_proc(
             }
             let mut cursor = POINT::default();
             let _ = GetCursorPos(&mut cursor);
+            // Snap layouts open from Maximize as a flyout of the shell, and the
+            // caption must stay for the whole pick. The next tick looks again.
+            let reach = 500 * GetDpiForWindow((*p).owner).max(96) as i32 / 96;
+            if (*p).last_hot == (*p).buttons[1]
+                && within_snap_reach(cursor, &button_rects(p)[1], reach)
+                && over_foreign_window(cursor)
+            {
+                SetTimer(Some(hwnd), HIDE, 450, None);
+                return LRESULT(0);
+            }
             let mut rect = RECT::default();
             let _ = GetWindowRect((*p).edge, &mut rect);
             rect.left += (*p).geometry.map_or(0, |(_, _, _, left, _, _)| left);
@@ -1560,6 +1605,26 @@ mod tests {
         );
         assert_eq!(offered(0, false), [false, true, false, false, false]);
         assert_eq!(system_menu_items(all, false)[0].0, SC_RESTORE);
+    }
+    #[test]
+    fn the_snap_flyout_is_expected_below_and_around_maximize() {
+        let maximize = RECT {
+            left: 900,
+            top: 3,
+            right: 944,
+            bottom: 29,
+        };
+        assert!(within_snap_reach(POINT { x: 920, y: 29 }, &maximize, 500));
+        assert!(within_snap_reach(POINT { x: 700, y: 400 }, &maximize, 500));
+        assert!(within_snap_reach(POINT { x: 1400, y: 528 }, &maximize, 500));
+        assert!(!within_snap_reach(POINT { x: 920, y: 28 }, &maximize, 500));
+        assert!(!within_snap_reach(POINT { x: 920, y: 529 }, &maximize, 500));
+        assert!(!within_snap_reach(POINT { x: 399, y: 100 }, &maximize, 500));
+        assert!(!within_snap_reach(
+            POINT { x: 1444, y: 100 },
+            &maximize,
+            500
+        ));
     }
     #[test]
     fn minimize_and_maximize_follow_the_window_styles() {
