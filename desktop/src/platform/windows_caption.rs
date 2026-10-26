@@ -33,6 +33,10 @@ struct State {
     expanded: bool,
     suppressed: bool,
     reveal_armed: bool,
+    // Where the pointer was when a window state change retired the caption.
+    // Hover is ignored until it leaves, or the caption would return at once
+    // under a pointer that has not moved.
+    reveal_block: Option<POINT>,
     page_left: Option<f64>,
     dark: bool,
     previous_focus: HWND,
@@ -132,6 +136,7 @@ pub fn install(window: &WebviewWindow) -> bool {
             expanded: false,
             suppressed: false,
             reveal_armed: false,
+            reveal_block: None,
             page_left: None,
             dark: true,
             previous_focus: HWND::default(),
@@ -440,6 +445,9 @@ unsafe fn prepare_state_change(p: *mut State) {
     (*p).pressed_button = HWND::default();
     (*p).drag_start = None;
     (*p).motion_paused = None;
+    let mut cursor = POINT::default();
+    let _ = GetCursorPos(&mut cursor);
+    (*p).reveal_block = Some(cursor);
     cancel_reveal(p);
     zephium_engine::set_window_caption_offset((*p).owner.0 as isize, 0.0, false);
     let _ = KillTimer(Some((*p).strip), FADE);
@@ -480,11 +488,33 @@ unsafe fn cancel_reveal(p: *mut State) {
         let _ = KillTimer(Some((*p).strip), REVEAL);
     }
 }
+fn dragged_beyond(origin: POINT, point: POINT, width: i32, height: i32) -> bool {
+    (point.x - origin.x).abs() >= width || (point.y - origin.y).abs() >= height
+}
+/// Whether the pointer has left the spot a state change retired the caption
+/// under; leaving it ends the hold for good.
+unsafe fn pointer_moved_on(p: *mut State) -> bool {
+    let Some(origin) = (*p).reveal_block else {
+        return true;
+    };
+    let mut cursor = POINT::default();
+    let _ = GetCursorPos(&mut cursor);
+    let moved = dragged_beyond(
+        origin,
+        cursor,
+        GetSystemMetrics(SM_CXDRAG),
+        GetSystemMetrics(SM_CYDRAG),
+    );
+    if moved {
+        (*p).reveal_block = None;
+    }
+    moved
+}
 /// Hovering the reveal edge asks for the caption after a short dwell. With the
 /// caption out, or the pointer on Maximize (the shell's Snap flyout opens from
 /// it), hovering holds it without waiting.
 unsafe fn hover_reveal(p: *mut State, hot: HWND) {
-    if (*p).suppressed || (*p).changing_state || (*p).sizing {
+    if (*p).suppressed || (*p).changing_state || (*p).sizing || !pointer_moved_on(p) {
         return;
     }
     if (*p).expanded || hot == (*p).buttons[1] {
@@ -599,9 +629,12 @@ unsafe fn pointer_input(
             if let Some(start) = (*p).drag_start {
                 let mut point = POINT::default();
                 let _ = GetCursorPos(&mut point);
-                if (point.x - start.x).abs() >= GetSystemMetrics(SM_CXDRAG)
-                    || (point.y - start.y).abs() >= GetSystemMetrics(SM_CYDRAG)
-                {
+                if dragged_beyond(
+                    start,
+                    point,
+                    GetSystemMetrics(SM_CXDRAG),
+                    GetSystemMetrics(SM_CYDRAG),
+                ) {
                     cancel_reveal(p);
                     (*p).drag_start = None;
                     let _ = ReleaseCapture();
@@ -920,7 +953,7 @@ unsafe extern "system" fn strip_proc(
             let mut cursor = POINT::default();
             let _ = GetCursorPos(&mut cursor);
             let hovered = WindowFromPoint(cursor);
-            if hovered == (*p).edge || (*p).buttons.contains(&hovered) {
+            if (hovered == (*p).edge || (*p).buttons.contains(&hovered)) && pointer_moved_on(p) {
                 reveal(p);
             }
             return LRESULT(0);
@@ -1177,6 +1210,16 @@ mod tests {
                 None
             );
         }
+    }
+    #[test]
+    fn a_held_reveal_waits_for_the_pointer_to_leave_the_drag_rectangle() {
+        let origin = POINT { x: 100, y: 0 };
+        let near = POINT { x: 102, y: 3 };
+        assert!(!dragged_beyond(origin, origin, 4, 4));
+        assert!(!dragged_beyond(origin, near, 4, 4));
+        assert!(dragged_beyond(origin, POINT { x: 104, y: 0 }, 4, 4));
+        assert!(dragged_beyond(origin, POINT { x: 100, y: 4 }, 4, 4));
+        assert!(dragged_beyond(origin, POINT { x: 96, y: 0 }, 4, 4));
     }
     #[test]
     fn top_resize_band_precedes_reveal_and_preserves_corners() {
