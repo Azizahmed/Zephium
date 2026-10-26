@@ -9,6 +9,8 @@ pub use agent_context_port::{
     any(target_os = "macos", target_os = "windows")
 ))]
 pub use agent_context_port::{work_browser_monotonic_deadline, work_browser_monotonic_now};
+#[cfg(any(target_os = "windows", test))]
+mod caption_keys;
 #[cfg(any(target_os = "macos", target_os = "windows", test))]
 mod data_kinds;
 #[cfg(all(target_os = "macos", feature = "native-agentic-work-resource-probe"))]
@@ -30,7 +32,9 @@ pub mod page_reader;
 mod pane_geometry;
 mod platform;
 #[cfg(target_os = "windows")]
-pub use platform::windows::{forget_window_caption_offset, set_window_caption_offset};
+pub use platform::windows::{
+    bridge_caption_keys, forget_window_caption_offset, set_window_caption_offset,
+};
 #[cfg(all(feature = "agentic-browser", any(target_os = "windows", test)))]
 mod work_site_session;
 #[cfg(any(target_os = "macos", target_os = "windows"))]

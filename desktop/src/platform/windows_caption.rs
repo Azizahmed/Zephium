@@ -1037,6 +1037,14 @@ unsafe extern "system" fn owner_proc(
         // DefWindowProc can destroy the subclass state synchronously.
         return DefSubclassProc(hwnd, msg, w, l);
     }
+    // Alt+Space, as Windows or the WebView accelerator bridge sends it. The
+    // frameless window has no caption for DefWindowProc to hang the menu on.
+    if msg == WM_SYSCOMMAND && w.0 as u32 & 0xfff0 == SC_KEYMENU && l.0 == ' ' as isize {
+        let mut origin = POINT::default();
+        let _ = ClientToScreen(hwnd, &mut origin);
+        show_system_menu(p, origin);
+        return LRESULT(0);
+    }
     if msg == WM_TIMER && w.0 == CLOSE_SETTLED {
         let _ = KillTimer(Some(hwnd), CLOSE_SETTLED);
         (*p).changing_state = false;

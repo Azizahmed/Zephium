@@ -147,13 +147,32 @@ pub fn init(
     if !menus::install(window) {
         crate::write_diagnostic(format_args!("chrome: using system menu rendering"));
     }
-    if !caption::install(window) {
+    if caption::install(window) {
+        bridge_caption_keys(window);
+    } else {
         // A visual enhancement must never remove access to window controls.
         let _ = window.set_decorations(true);
     }
     let hardened = harden_privileged(window, expected_user_data_folder, on_runtime_update);
     apply_material(window, true);
     hardened
+}
+
+/// F10 and Alt+Space typed into the chrome WebView never reach the window, so
+/// the caption hears them from the WebView's accelerator hook instead.
+fn bridge_caption_keys(window: &WebviewWindow) {
+    let scheduled = window.with_webview(|webview| {
+        if let Err(error) = zephium_engine::bridge_caption_keys(&webview.controller()) {
+            crate::write_diagnostic(format_args!(
+                "caption: keyboard bridge unavailable: {error}"
+            ));
+        }
+    });
+    if scheduled.is_err() {
+        crate::write_diagnostic(format_args!(
+            "caption: keyboard bridge could not be scheduled"
+        ));
+    }
 }
 
 /// Tauri does not expose Wry's permission callback. Install the WebView2
