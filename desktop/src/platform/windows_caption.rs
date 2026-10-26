@@ -230,6 +230,20 @@ pub fn set_dark(window: &WebviewWindow, dark: bool) {
         }
     }
 }
+/// Minimize and Maximize follow the owner's styles, which onboarding withdraws.
+/// A maximized window can always be restored.
+fn button_enabled(index: usize, style: u32, zoomed: bool) -> bool {
+    match index {
+        0 => style & WS_MINIMIZEBOX.0 != 0,
+        1 => style & WS_MAXIMIZEBOX.0 != 0 || zoomed,
+        _ => true,
+    }
+}
+unsafe fn enabled_buttons(owner: HWND) -> [bool; 3] {
+    let style = GetWindowLongPtrW(owner, GWL_STYLE) as u32;
+    let zoomed = IsZoomed(owner).as_bool();
+    std::array::from_fn(|index| button_enabled(index, style, zoomed))
+}
 unsafe fn visible(hwnd: HWND, show: bool) {
     if (GetWindowLongPtrW(hwnd, GWL_STYLE) as u32 & WS_VISIBLE.0 != 0) != show {
         let _ = ShowWindow(hwnd, if show { SW_SHOWNA } else { SW_HIDE });
@@ -256,12 +270,14 @@ unsafe fn render(p: *mut State) -> bool {
         hot: index((*p).hot_button),
         pressed: index((*p).pressed_button),
         focused: index(GetFocus()),
+        enabled: enabled_buttons((*p).owner),
         contrast: super::menus::high_contrast().then(|| {
             [
                 GetSysColor(COLOR_WINDOW),
                 GetSysColor(COLOR_WINDOWTEXT),
                 GetSysColor(COLOR_HIGHLIGHT),
                 GetSysColor(COLOR_HIGHLIGHTTEXT),
+                GetSysColor(COLOR_GRAYTEXT),
             ]
         }),
     };
@@ -370,8 +386,11 @@ unsafe fn layout(p: *mut State) {
     }
     let controls_visible = show && displacement > 0 && render(p);
     visible((*p).strip, controls_visible);
-    for button in (*p).buttons {
-        visible(button, controls_visible);
+    // A withdrawn button is only painted. Taking its window off the input host
+    // leaves nothing to click, focus or announce.
+    let enabled = enabled_buttons(owner);
+    for (button, enabled) in (*p).buttons.into_iter().zip(enabled) {
+        visible(button, controls_visible && enabled);
     }
     visible((*p).edge, show);
     (*p).laying_out = false;
@@ -558,7 +577,10 @@ unsafe fn button_at_point(p: *mut State, point: POINT) -> HWND {
     for (button, rect) in (*p).buttons.into_iter().zip(&mut rects) {
         let _ = GetWindowRect(button, rect);
     }
-    button_hit(&rects, point).map_or(HWND::default(), |index| (*p).buttons[index])
+    let enabled = enabled_buttons((*p).owner);
+    button_hit(&rects, point)
+        .filter(|index| enabled[*index])
+        .map_or(HWND::default(), |index| (*p).buttons[index])
 }
 unsafe fn update_hot(p: *mut State, hot: HWND) {
     if (*p).hot_button != hot {
@@ -753,8 +775,10 @@ unsafe extern "system" fn edge_proc(
         WM_LBUTTONDBLCLK => {
             let command = if IsZoomed((*p).owner).as_bool() {
                 SC_RESTORE
-            } else {
+            } else if enabled_buttons((*p).owner)[1] {
                 SC_MAXIMIZE
+            } else {
+                return LRESULT(0);
             };
             let _ = PostMessageW(
                 Some((*p).owner),
@@ -843,7 +867,8 @@ unsafe extern "system" fn owner_proc(
         (*p).opacity = 255;
         let _ = KillTimer(Some((*p).strip), FADE);
         layout(p);
-        let _ = SetFocus(Some((*p).buttons[0]));
+        let first = enabled_buttons(hwnd).iter().position(|enabled| *enabled);
+        let _ = SetFocus(Some((*p).buttons[first.unwrap_or(2)]));
         return LRESULT(0);
     }
     let state_command = msg == WM_SYSCOMMAND
@@ -866,7 +891,7 @@ unsafe extern "system" fn owner_proc(
             return LRESULT(hit as isize);
         }
     }
-    if msg == WM_NCHITTEST && (*p).expanded {
+    if msg == WM_NCHITTEST && (*p).expanded && enabled_buttons(hwnd)[1] {
         let point = POINT {
             x: l.0 as i16 as i32,
             y: (l.0 >> 16) as i16 as i32,
@@ -888,6 +913,7 @@ unsafe extern "system" fn owner_proc(
         msg,
         WM_SIZE
             | WM_DPICHANGED
+            | WM_STYLECHANGED
             | WM_WINDOWPOSCHANGED
             | WM_PARENTNOTIFY
             | WM_ACTIVATE
@@ -1036,6 +1062,9 @@ unsafe extern "system" fn strip_proc(
                 3 => SC_CLOSE,
                 _ => return DefSubclassProc(hwnd, msg, w, l),
             };
+            if !enabled_buttons((*p).owner)[(w.0 & 0xffff) - 1] {
+                return LRESULT(0);
+            }
             // Retire visible pixels before focus/default-button processing,
             // including Close, which used to repaint all three child buttons.
             prepare_state_change(p);
@@ -1215,6 +1244,18 @@ mod tests {
                 None
             );
         }
+    }
+    #[test]
+    fn minimize_and_maximize_follow_the_window_styles() {
+        let both = WS_MINIMIZEBOX.0 | WS_MAXIMIZEBOX.0;
+        assert!((0..3).all(|index| button_enabled(index, both, false)));
+        assert!(!button_enabled(0, WS_MAXIMIZEBOX.0, false));
+        assert!(!button_enabled(1, WS_MINIMIZEBOX.0, false));
+        assert!(button_enabled(2, 0, false));
+        // Onboarding clears both; a window already maximized can still restore.
+        assert!(!button_enabled(0, 0, false));
+        assert!(!button_enabled(1, 0, false));
+        assert!(button_enabled(1, 0, true));
     }
     #[test]
     fn a_held_reveal_waits_for_the_pointer_to_leave_the_drag_rectangle() {
