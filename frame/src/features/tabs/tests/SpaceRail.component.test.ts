@@ -18,6 +18,9 @@ vi.mock("$shared/ipc/bindings", async () => {
   const ok = async () => ({ accepted: true, operation_id: null });
   return mockBindings({
     tabsBootstrap: async () => {},
+    sidebarSetHidden: async () => {},
+    sidebarPeek: async () => {},
+    windowSky: async () => {},
     sidebarSetWidth: async () => {},
     settingSet: ok,
     settingGet: async () => null,
@@ -32,7 +35,7 @@ vi.mock("$shared/ipc/bindings", async () => {
 
 afterEach(() => {
   switched.length = 0;
-  sidebar.adoptMode("default");
+  sidebar.setMode("default");
   tabs.dispose();
   uiCommands.dispose();
   surface.dispose();
@@ -54,7 +57,7 @@ async function rail() {
     active: "a",
     split_group: null,
   });
-  sidebar.adoptMode("compact");
+  sidebar.setMode("compact");
   return render(TabRail, { entries: open, onSelect: () => {} });
 }
 

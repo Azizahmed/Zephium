@@ -521,6 +521,18 @@ export const commands = {
 	launcherSearch: (query: string, requestId: string) => __TAURI_INVOKE<boolean>("launcher_search", { query, requestId }),
 	launcherRun: (action: SearchAction, context: SearchContext, background: boolean) => __TAURI_INVOKE<OperationAdmission>("launcher_run", { action, context, background }),
 	sidebarSetWidth: (width: number | null, animate: boolean, revision: number | null) => __TAURI_INVOKE<void>("sidebar_set_width", { width, animate, revision }),
+	/**  Puts the sidebar away, the page taking the window, or brings it back. */
+	sidebarSetHidden: (hidden: boolean) => __TAURI_INVOKE<void>("sidebar_set_hidden", { hidden }),
+	/**
+	 *  Brings a hidden sidebar over the page while the pointer wants it, or puts
+	 *  it back beneath. The window controls ride with it.
+	 */
+	sidebarPeek: (peek: boolean) => __TAURI_INVOKE<void>("sidebar_peek", { peek }),
+	/**
+	 *  Shows the Zephium sky over the window's glass for a new tab, or fades it
+	 *  to the glass for anything else.
+	 */
+	windowSky: (shown: boolean) => __TAURI_INVOKE<void>("window_sky", { shown }),
 	sidebarResize: (width: number | null, enabled: boolean, revision: number | null) => __TAURI_INVOKE<boolean>("sidebar_resize", { width, enabled, revision }),
 	sidebarResizeGuide: (width: number | null) => __TAURI_INVOKE<boolean>("sidebar_resize_guide", { width }),
 	tabDragOver: (x: number | null, y: number | null) => __TAURI_INVOKE<void>("tab_drag_over", { x, y }),
@@ -1744,9 +1756,7 @@ export type LoginItemStatus = {
 	needs_approval: boolean,
 };
 
-export type Material = "none" | "vibrancy" | "liquid_glass" | "acrylic" | "mica" |
-/**  The window wears the frost of the Zephium sky, drawn by the app. */
-"sky";
+export type Material = "none" | "vibrancy" | "liquid_glass" | "acrylic" | "mica";
 
 /**  Outcome of admitting one public image for a subject on the canvas. */
 export type MediaAdmitV1 =

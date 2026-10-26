@@ -15,6 +15,9 @@ vi.mock("$shared/ipc/bindings", async () => {
     workCall: native.work,
     noteCall: native.note,
     resourceCall: native.resource,
+    sidebarSetHidden: async () => {},
+    sidebarPeek: async () => {},
+    windowSky: async () => {},
     sidebarSetWidth: async () => {},
   });
 });

@@ -419,3 +419,39 @@ pub fn install(window: &WebviewWindow) {
         controls.settle();
     }
 }
+
+/// Puts the controls away while the sidebar is hidden, which leaves the page
+/// under the corner they rest in: invisible buttons there would still take
+/// its clicks. They come back, at their inset, with the sidebar.
+pub fn set_tucked(window: &WebviewWindow, tucked: bool) {
+    if MainThreadMarker::new().is_none() {
+        return;
+    }
+    let Ok(pointer) = window.ns_window() else {
+        return;
+    };
+    // SAFETY: Tao's live NSWindow, borrowed for this main-thread call only.
+    let ns_window = unsafe { &*(pointer as *const NSWindow) };
+    let Some(close) = ns_window.standardWindowButton(NSWindowButton::CloseButton) else {
+        return;
+    };
+    // SAFETY: a main-thread read of the live close button's parent.
+    let Some(parent) = (unsafe { close.superview() }) else {
+        return;
+    };
+    let Some(controls) = parent
+        .subviews()
+        .iter()
+        .find_map(|view| view.downcast_ref::<WindowControls>().map(|c| c.retain()))
+    else {
+        return;
+    };
+    for button in controls.buttons() {
+        button.setHidden(tucked);
+    }
+    controls.setHidden(tucked);
+    if !tucked && !controls.ivars().suspended.get() {
+        controls.reinset();
+        controls.resync(false);
+    }
+}

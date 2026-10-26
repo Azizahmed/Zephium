@@ -12,11 +12,16 @@ import * as launch from "$session/motion.svelte";
 import * as sidebar from "$session/sidebar-mode.svelte";
 import Shell from "../Shell.svelte";
 
+// The toggle puts the column into the rail where it cannot hide yet.
+vi.mock("$shared/platform", () => ({ IS_MAC: false, IS_WINDOWS: true }));
 vi.mock("$shared/ipc/bindings", async () => {
   const { mockBindings } = await import("$shared/testing/bindings");
   return mockBindings({
     pagePermissionCardHost: async () => {},
     tabsBootstrap: async () => {},
+    sidebarSetHidden: async () => {},
+    sidebarPeek: async () => {},
+    windowSky: async () => {},
     sidebarSetWidth: async () => {},
     sidebarResize: async () => true,
     sidebarResizeGuide: async () => true,

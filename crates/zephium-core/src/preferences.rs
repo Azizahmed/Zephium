@@ -176,7 +176,7 @@ pub fn value_allowed(key: &str, value: &str) -> bool {
         "search.custom-url" => value.is_empty() || crate::search::valid_template(value),
         "search.engine" => crate::search::SearchEngine::from_id(value).is_some(),
         "appearance" => matches!(value, "system" | "light" | "dark"),
-        "sidebar.mode" => matches!(value, "default" | "compact"),
+        "sidebar.mode" => matches!(value, "default" | "compact" | "hidden"),
         "ui.accent" => matches!(
             value,
             "graphite" | "sky" | "sage" | "rose" | "amber" | "teal" | "lavender" | "orchid"

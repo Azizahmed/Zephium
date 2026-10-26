@@ -45,9 +45,9 @@
     return () => observer.disconnect();
   });
 
-  // What the person may choose here: the sky, or the system's own glass.
-  // Windows has one system material worth having; a Mac offers the glass or
-  // the older vibrancy. Solid is always there.
+  // What the person may choose here: the sky on a new tab with the system's
+  // glass beyond it, or the system's glass alone. Windows has one system
+  // material worth having; a Mac offers the glass or the older vibrancy.
   const materialOptions = IS_WINDOWS
     ? [
         { value: "auto", label: m.settings_material_sky() },
@@ -67,7 +67,6 @@
     return chosen !== "auto" && material !== "" && chosen !== material;
   });
   const materials: Record<string, () => string> = {
-    sky: m.settings_material_sky,
     liquid_glass: m.settings_material_glass,
     vibrancy: m.settings_material_vibrancy,
     acrylic: m.settings_material_acrylic,
@@ -137,7 +136,7 @@
       onchange={(v) => void preferences.set("ui.material", v)}
     /></SettingsRow
   >
-  {#if !IS_WINDOWS && material !== "none" && material !== "sky" && material !== ""}
+  {#if !IS_WINDOWS && material !== "none" && material !== ""}
     <SettingsRow settingId="appearance.tint" title={m.look_tint()} description={m.look_tint_desc()}>
       <div class="slider">
         <Slider
@@ -166,7 +165,9 @@
       disabled={preferences.saving()}
       options={[
         { value: "default", label: m.settings_expanded() },
-        { value: "compact", label: m.settings_compact() },
+        IS_WINDOWS
+          ? { value: "compact", label: m.settings_compact() }
+          : { value: "hidden", label: m.settings_hidden() },
       ]}
       onchange={(v) => void preferences.set("sidebar.mode", v)}
     />

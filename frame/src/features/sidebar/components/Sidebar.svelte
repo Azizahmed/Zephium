@@ -10,10 +10,15 @@
     COMPACT_WIDTH,
     PANEL_GAP,
     effectiveWidth,
+    holdShown,
     isCompact,
+    isHidden,
+    sidebarResizeActive,
     sidebarResizeSettlement,
     toggleMode,
   } from "$session/sidebar-mode.svelte";
+  import { commands } from "$shared/ipc/bindings";
+  import { FROSTS, scene } from "$shared/sky";
   import { uiCommands as ui } from "$domain/ui-commands";
   import SidebarHeader from "./SidebarHeader.svelte";
   import * as shapeMorph from "../lib/shape-morph";
@@ -62,6 +67,69 @@
   let navigating = $derived(settings);
   let paneled = $derived(settings || tools.activeTool() !== null);
   let compact = $derived(navigating || railPage || isCompact() || tools.activeTool() !== null);
+  // Work, Tasks, Settings and the tools want the column in view as their rail.
+  $effect(() => {
+    holdShown(navigating || railPage || tools.activeTool() !== null);
+  });
+
+  // Hidden, the column waits off to the side, beneath the page, and comes
+  // over it as a card while the pointer rests on the window's left edge.
+  let hidden = $derived(isHidden());
+  let aside = $state<HTMLElement>();
+  let peeking = $state(false);
+  /** The pointer has to rest on the edge a moment, so crossing it on the way
+   *  to the page's own left edge does not bring the column out. */
+  const DWELL_MS = 70;
+  /** Leaving the card gives it a moment: a pointer overshooting its edge
+   *  and coming back should not see it go and return. */
+  const LINGER_MS = 320;
+  let dwell: ReturnType<typeof setTimeout> | undefined;
+  let linger: ReturnType<typeof setTimeout> | undefined;
+  let lowered: ReturnType<typeof setTimeout> | undefined;
+  function peek() {
+    clearTimeout(linger);
+    clearTimeout(lowered);
+    if (peeking) return;
+    // Native stacks the chrome over the page before the card slides in, so
+    // the slide is seen from its first frame.
+    void commands.sidebarPeek(true).then(() =>
+      requestAnimationFrame(() => {
+        if (hidden) peeking = true;
+      }),
+    );
+  }
+  /** Something in the card still needs it: a field being typed in, an open
+   *  panel, or a drag. */
+  const needed = () => {
+    if (!aside || sidebarResizeActive()) return !!aside;
+    const typing =
+      document.activeElement instanceof HTMLInputElement && aside.contains(document.activeElement);
+    return typing || !!aside.querySelector('[data-open="true"]');
+  };
+  function release() {
+    clearTimeout(linger);
+    linger = setTimeout(() => {
+      if (pointerIn || needed()) return;
+      peeking = false;
+      // Beneath the page again only once the card has slid away.
+      lowered = setTimeout(() => void commands.sidebarPeek(false), duration("page"));
+    }, LINGER_MS);
+  }
+  $effect(() => {
+    if (hidden) return;
+    clearTimeout(dwell);
+    clearTimeout(linger);
+    clearTimeout(lowered);
+    untrack(() => {
+      if (peeking) void commands.sidebarPeek(false);
+      peeking = false;
+    });
+  });
+  $effect(() => () => {
+    clearTimeout(dwell);
+    clearTimeout(linger);
+    clearTimeout(lowered);
+  });
 
   // A change of shape is one continuous change: every mark travels from the
   // old shape into the new one while native slides the page to match. Not
@@ -176,7 +244,22 @@
   }
 </script>
 
+{#if hidden}<!-- The window's left gutter, the one edge of the page's surround the
+     chrome still owns while the column is away. -->
+  <div
+    class="peek-edge"
+    aria-hidden="true"
+    onpointerenter={() => {
+      clearTimeout(dwell);
+      dwell = setTimeout(peek, DWELL_MS);
+    }}
+    onpointerleave={() => clearTimeout(dwell)}
+  ></div>{/if}
 <aside
+  bind:this={aside}
+  data-hidden={hidden || undefined}
+  data-peek={(hidden && peeking) || undefined}
+  style:--sidebar-frost={hidden ? `url("${FROSTS[scene()]}")` : undefined}
   data-tauri-drag-region="deep"
   aria-label={m.ui_browser_sidebar()}
   style:width={`${width}px`}
@@ -186,8 +269,14 @@
   data-sidebar-resize-settling={resizeSettling}
   data-header-fresh={headerFresh}
   data-pointer-in={pointerIn}
-  onpointerenter={() => (pointerIn = true)}
-  onpointerleave={() => (pointerIn = false)}
+  onpointerenter={() => {
+    pointerIn = true;
+    if (hidden) clearTimeout(linger);
+  }}
+  onpointerleave={() => {
+    pointerIn = false;
+    if (hidden && peeking) release();
+  }}
   class="browser-sidebar relative flex shrink-0 flex-col text-text select-none"
 >
   {#if !navigating && !railPage && tools.activeTool() === null}<SidebarResizeHandle
@@ -239,6 +328,39 @@
 
   @media (prefers-reduced-motion: reduce) {
     :global([data-under-panel]) {
+      transition: none;
+    }
+  }
+
+  /* Hidden, the column is a card that waits beside the window and slides
+     over the page. It wears the sky's frost, a picture stretched rather than
+     a blur drawn, so bringing it out costs one transform. */
+  .browser-sidebar[data-hidden] {
+    position: absolute;
+    inset-block: 8px;
+    inset-inline-start: 8px;
+    z-index: 30;
+    border-radius: var(--content-radius);
+    background: var(--sidebar-frost) center / cover;
+    box-shadow: var(--shadow-overlay);
+    translate: calc(-100% - 24px) 0;
+    transition: translate var(--motion-page) var(--ease-emphasized);
+  }
+
+  .browser-sidebar[data-hidden][data-peek] {
+    translate: 0 0;
+  }
+
+  .peek-edge {
+    position: absolute;
+    inset-block: 0;
+    inset-inline-start: 0;
+    z-index: 31;
+    width: 8px;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .browser-sidebar[data-hidden] {
       transition: none;
     }
   }

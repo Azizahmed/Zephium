@@ -1818,6 +1818,9 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             launcher_search,
             launcher_run,
             sidebar_set_width,
+            sidebar_set_hidden,
+            sidebar_peek,
+            window_sky,
             sidebar_resize,
             sidebar_resize_guide,
             tab_drag_over,
@@ -5322,6 +5325,48 @@ fn sidebar_set_width(
     #[cfg(not(target_os = "macos"))]
     let _ = revision;
     shell.dispatch(Command::SetSidebarWidth(width, animate));
+}
+
+/// Puts the sidebar away, the page taking the window, or brings it back.
+#[tauri::command]
+#[specta::specta]
+fn sidebar_set_hidden(caller: WebviewWindow, shell: State<'_, Handle>, hidden: bool) {
+    if !authorize(&caller, CallerPolicy::Main, "sidebar_set_hidden") {
+        return;
+    }
+    #[cfg(target_os = "macos")]
+    platform::imp::tuck_window_controls(&caller, hidden);
+    shell.dispatch(Command::SetSidebarHidden(hidden));
+}
+
+/// Brings a hidden sidebar over the page while the pointer wants it, or puts
+/// it back beneath. The window controls ride with it.
+#[tauri::command]
+#[specta::specta]
+fn sidebar_peek(caller: WebviewWindow, shell: State<'_, Handle>, peek: bool) {
+    if !authorize(&caller, CallerPolicy::Main, "sidebar_peek") {
+        return;
+    }
+    #[cfg(target_os = "macos")]
+    platform::imp::tuck_window_controls(&caller, !peek);
+    shell.dispatch(Command::PeekSidebar(peek));
+}
+
+/// Shows the Zephium sky over the window's glass for a new tab, or fades it
+/// to the glass for anything else.
+#[tauri::command]
+#[specta::specta]
+fn window_sky(caller: WebviewWindow, shown: bool) {
+    if !authorize(&caller, CallerPolicy::Main, "window_sky") {
+        return;
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let window = caller.clone();
+        let _ = caller.run_on_main_thread(move || material::show_sky(&window, shown));
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = shown;
 }
 
 #[tauri::command]

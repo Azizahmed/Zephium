@@ -24,6 +24,9 @@ vi.mock("$shared/ipc/bindings", async () => {
   return mockBindings({
     pagePermissionCardHost: async () => {},
     tabsBootstrap: async () => {},
+    sidebarSetHidden: async () => {},
+    sidebarPeek: async () => {},
+    windowSky: async () => {},
     sidebarSetWidth: async () => {},
     sidebarResize: async () => false,
     sidebarResizeGuide: async () => true,
@@ -210,7 +213,7 @@ const THREE: ProfilesView = {
 };
 
 afterEach(() => {
-  sidebar.adoptMode("default");
+  sidebar.setMode("default");
   favicons.dispose();
   surface.dispose();
   tabs.dispose();
@@ -269,7 +272,7 @@ for (const theme of ["light", "dark"] as const) {
     await crop(`${theme}-empty`);
 
     spaced("read");
-    sidebar.adoptMode("compact");
+    sidebar.setMode("compact");
     await settle();
     await crop(`${theme}-rail`);
     // The rail's first button opens a short stack beside it; editing takes the column in place.
@@ -287,7 +290,7 @@ for (const theme of ["light", "dark"] as const) {
     spaced("home");
     await settle();
     await crop(`${theme}-rail-no-icon`);
-    sidebar.adoptMode("default");
+    sidebar.setMode("default");
     await settle();
 
     // The panel on the address steps the column back under it, as the
@@ -364,7 +367,7 @@ for (const theme of ["light", "dark"] as const) {
       await crop(`${theme}-profile-menu-${count}`);
       away();
 
-      sidebar.adoptMode("compact");
+      sidebar.setMode("compact");
       await settle();
       emitNativeEvent("profilesChanged", roster);
       await screen.getByRole("button", { name: /^Tools/ }).click();
@@ -373,14 +376,14 @@ for (const theme of ["light", "dark"] as const) {
       away();
 
       // Back from the rail, the stack opens whole again.
-      sidebar.adoptMode("default");
+      sidebar.setMode("default");
       await settle();
       await screen.getByRole("button", { name: /^Tools/ }).click();
       await settle();
       await crop(`${theme}-profile-after-rail-${count}`);
       away();
       await screen.unmount();
-      sidebar.adoptMode("default");
+      sidebar.setMode("default");
       favicons.dispose();
       surface.dispose();
       tabs.dispose();

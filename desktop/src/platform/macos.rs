@@ -610,6 +610,11 @@ pub fn publish_sidebar_resize_revision(revision: u64) -> bool {
 }
 
 /// Native has a new column width; a guide left at another edge goes off.
+pub fn tuck_window_controls(window: &WebviewWindow, tucked: bool) {
+    let owner = window.clone();
+    let _ = window.run_on_main_thread(move || super::window_controls::set_tucked(&owner, tucked));
+}
+
 pub fn sidebar_column_width(window: &WebviewWindow, width: f64) {
     let _ = window.run_on_main_thread(move || sidebar_resize::column_width(width));
 }

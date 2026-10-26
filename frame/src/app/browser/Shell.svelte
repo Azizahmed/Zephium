@@ -10,7 +10,7 @@
   // never a startup request.
   const loadNotesPage = () => import("$features/notes").then((notes) => notes.loadNotesPage());
   import LazyView from "$shared/ui/LazyView";
-  import type { TabView } from "$shared/ipc/bindings";
+  import { commands, type TabView } from "$shared/ipc/bindings";
   import RenderBoundary from "$shared/ui/RenderBoundary";
   import { loadClearSiteData, loadSettings } from "$features/settings";
   import { EssentialTile } from "$features/essentials";
@@ -65,7 +65,7 @@
     SidebarNotice,
     UtilityTray,
   } from "$features/sidebar";
-  import { IS_WINDOWS } from "$shared/platform";
+  import { IS_MAC, IS_WINDOWS } from "$shared/platform";
   import { installChromeMenu } from "$shared/lib/chrome-menu";
   import { tabs } from "$domain/tabs";
   import { preferences } from "$domain/preferences";
@@ -262,6 +262,14 @@
     const tab = tabs.activeTab();
     if (!tab || tab.url || (tab.content ?? "web") !== "web") return false;
     return browserPage.currentPage() === null && (!tab.loading || newTabLoad === tab.id);
+  });
+  // The window wears the Zephium sky behind a new tab and its own glass
+  // behind anything else, crossing between them as the page arrives.
+  let skyShown = $derived(newTabShown && preferences.value("ui.material") === "auto");
+  $effect(() => {
+    const shown = skyShown;
+    if (IS_MAC) void commands.windowSky(shown);
+    document.documentElement.toggleAttribute("data-sky", shown);
   });
   $effect(() => {
     const tab = tabs.activeTab();

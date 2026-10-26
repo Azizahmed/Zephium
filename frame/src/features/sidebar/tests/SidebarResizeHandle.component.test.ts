@@ -14,6 +14,9 @@ vi.mock("$shared/ipc/bindings", async () => {
   return mockBindings({
     sidebarResize: native.resize,
     sidebarResizeGuide: async () => true,
+    sidebarSetHidden: async () => {},
+    sidebarPeek: async () => {},
+    windowSky: async () => {},
     sidebarSetWidth: async () => {},
   });
 });
