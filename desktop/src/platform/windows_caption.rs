@@ -562,6 +562,27 @@ fn button_hit(rects: &[RECT; 3], point: POINT) -> Option<usize> {
         point.x >= rect.left && point.x < rect.right && point.y >= rect.top && point.y < rect.bottom
     })
 }
+/// Maximized, the pills sit a few pixels inside the screen, so a pointer
+/// thrown into the corner would miss them. Their hit areas run on to the
+/// client's top and right edges; what is painted does not change.
+fn reach_corner(rects: &mut [RECT; 3], client: &RECT) {
+    for rect in rects.iter_mut() {
+        rect.top = rect.top.min(client.top);
+    }
+    rects[2].right = rects[2].right.max(client.right);
+}
+unsafe fn button_rects(p: *mut State) -> [RECT; 3] {
+    let mut rects = [RECT::default(); 3];
+    for (button, rect) in (*p).buttons.into_iter().zip(&mut rects) {
+        let _ = GetWindowRect(button, rect);
+    }
+    if IsZoomed((*p).owner).as_bool() {
+        let mut client = RECT::default();
+        let _ = GetWindowRect((*p).edge, &mut client);
+        reach_corner(&mut rects, &client);
+    }
+    rects
+}
 unsafe fn button_at_point(p: *mut State, point: POINT) -> HWND {
     if (*p).opacity == 0 || (*p).suppressed {
         return HWND::default();
@@ -573,10 +594,7 @@ unsafe fn button_at_point(p: *mut State, point: POINT) -> HWND {
         // Releasing there must not activate an invisible part of the button.
         return HWND::default();
     }
-    let mut rects = [RECT::default(); 3];
-    for (button, rect) in (*p).buttons.into_iter().zip(&mut rects) {
-        let _ = GetWindowRect(button, rect);
-    }
+    let rects = button_rects(p);
     let enabled = enabled_buttons((*p).owner);
     button_hit(&rects, point)
         .filter(|index| enabled[*index])
@@ -896,9 +914,7 @@ unsafe extern "system" fn owner_proc(
             x: l.0 as i16 as i32,
             y: (l.0 >> 16) as i16 as i32,
         };
-        let mut rect = RECT::default();
-        let _ = GetWindowRect((*p).buttons[1], &mut rect);
-        if PtInRect(&rect, point).as_bool() {
+        if PtInRect(&button_rects(p)[1], point).as_bool() {
             return LRESULT(HTMAXBUTTON as isize);
         }
     }
@@ -1244,6 +1260,37 @@ mod tests {
                 None
             );
         }
+    }
+    #[test]
+    fn maximized_corner_hit_areas_reach_the_screen_edges_without_overlapping() {
+        let client = RECT {
+            left: 0,
+            top: 0,
+            right: 1000,
+            bottom: 600,
+        };
+        let pill = |index: i32| RECT {
+            left: 865 + index * 44,
+            top: 3,
+            right: 865 + (index + 1) * 44,
+            bottom: 29,
+        };
+        let mut rects = [pill(0), pill(1), pill(2)];
+        let painted = rects;
+        reach_corner(&mut rects, &client);
+        assert!(rects.iter().all(|rect| rect.top == 0 && rect.bottom == 29));
+        assert_eq!(rects[2].right, 1000);
+        for index in 0..2 {
+            assert_eq!(rects[index].left, painted[index].left);
+            assert_eq!(rects[index].right, painted[index].right);
+        }
+        assert_eq!(rects[2].left, painted[2].left);
+        // The top-right pixel is Close; one past the last pill no longer misses.
+        assert_eq!(button_hit(&rects, POINT { x: 999, y: 0 }), Some(2));
+        assert_eq!(button_hit(&rects, POINT { x: 900, y: 0 }), Some(0));
+        assert_eq!(button_hit(&rects, POINT { x: 940, y: 1 }), Some(1));
+        assert_eq!(button_hit(&rects, POINT { x: 999, y: 29 }), None);
+        assert_eq!(button_hit(&rects, POINT { x: 864, y: 0 }), None);
     }
     #[test]
     fn minimize_and_maximize_follow_the_window_styles() {
