@@ -229,17 +229,17 @@ impl Shell {
         if !self.bootstrapped {
             self.bootstrap();
         }
-        let Some(profile) = self
+        let Some((profile, space)) = self
             .windows
             .focused()
-            .map(|window| window.profile)
-            .filter(|profile| self.bookmarks_writable(*profile))
+            .map(|window| (window.profile, window.space))
+            .filter(|(profile, _)| self.bookmarks_writable(*profile))
         else {
             done.finish(None);
             return;
         };
         if let ImportWork::Essentials(sites) = work {
-            done.finish(Some(self.keep_imported_sites(profile, sites)));
+            done.finish(Some(self.keep_imported_sites(space, sites)));
             return;
         }
         if self.bookmarks.imports.len() >= MAX_PENDING_BOOKMARK_CALLS {
