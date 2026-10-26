@@ -3327,7 +3327,7 @@
   "profiles_avatar_label": "{name} 的圖片",
   "profiles_menu_label": "切換至 {name}",
   "account_welcome_title": "登入 Zephium",
-  "account_welcome_body": "一個帳戶即可用於 Zephium AI 與你的裝置，並會在同步功能推出時使用。不登入也能完整使用 Zephium。",
+  "account_welcome_body": "無需自備金鑰即可使用 Zephium AI。其他功能不需帳戶也能照常使用。",
   "account_name_add": "加入你的名稱",
   "account_avatar_add": "新增照片",
   "account_avatar_change": "更換照片",

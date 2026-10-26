@@ -3327,7 +3327,7 @@
   "profiles_avatar_label": "{name} profil resmi",
   "profiles_menu_label": "{name} profiline geç",
   "account_welcome_title": "Zephium'da oturum açın",
-  "account_welcome_body": "Zephium AI ve aygıtlarınız için, gelecekte kullanıma girdiğinde eşitleme için tek bir hesap. Zephium hesap olmadan da tam olarak çalışır.",
+  "account_welcome_body": "Zephium AI'ı kendi anahtarlarınız olmadan kullanın. Geri kalan her şey hesap olmadan da aynı şekilde çalışır.",
   "account_name_add": "Adınızı ekleyin",
   "account_avatar_add": "Fotoğraf ekle",
   "account_avatar_change": "Fotoğrafı değiştir",
