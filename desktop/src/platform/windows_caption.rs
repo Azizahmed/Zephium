@@ -397,19 +397,39 @@ unsafe fn layout(p: *mut State) {
 }
 // The top target forwards native resize gestures: the child WebView otherwise
 // consumes this frameless client border before the owner sees it.
+unsafe fn resizable(owner: HWND) -> bool {
+    !IsZoomed(owner).as_bool() && GetWindowLongPtrW(owner, GWL_STYLE) as u32 & WS_THICKFRAME.0 != 0
+}
 unsafe fn resize_border(owner: HWND) -> i32 {
-    if IsZoomed(owner).as_bool()
-        || GetWindowLongPtrW(owner, GWL_STYLE) as u32 & WS_THICKFRAME.0 == 0
-    {
+    if !resizable(owner) {
         return 0;
     }
     let dpi = GetDpiForWindow(owner).max(96);
-    // Only the visible outer rim belongs to resize hit testing. The full
-    // padded sizing frame extends into the caption and the page gutter.
+    // The right gutter lies over the page, so only the visible outer rim of
+    // the sizing frame belongs to it.
     (2 * GetSystemMetricsForDpi(SM_CYBORDER, dpi)).max(1)
 }
-fn top_frame_hit(x: i32, y: i32, width: i32, border: i32, corner: i32) -> Option<u32> {
+// The top band is the reveal edge itself, so it has the sizing frame's full
+// depth: a few pixels are too narrow to catch without overshooting.
+unsafe fn top_resize_border(owner: HWND) -> i32 {
+    if !resizable(owner) {
+        return 0;
+    }
+    let dpi = GetDpiForWindow(owner).max(96);
+    GetSystemMetricsForDpi(SM_CYFRAME, dpi) + GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi)
+}
+fn top_frame_hit(
+    x: i32,
+    y: i32,
+    width: i32,
+    border: i32,
+    corner: i32,
+    skip: Option<(i32, i32)>,
+) -> Option<u32> {
     if border <= 0 || x < 0 || x >= width || y < 0 || y >= border {
+        return None;
+    }
+    if skip.is_some_and(|(from, to)| x >= from && x < to) {
         return None;
     }
     Some(if x < corner {
@@ -438,11 +458,18 @@ unsafe fn resize_hit(p: *mut State, l: LPARAM) -> Option<u32> {
     let mut rect = RECT::default();
     let _ = GetClientRect((*p).owner, &mut rect);
     let border = resize_border((*p).owner);
+    let top = if (*p).suppressed {
+        0
+    } else {
+        top_resize_border((*p).owner)
+    };
     let dpi = GetDpiForWindow((*p).owner).max(96);
     let corner = 2
         * (GetSystemMetricsForDpi(SM_CYSIZEFRAME, dpi)
             + GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi));
-    top_frame_hit(point.x, point.y, rect.right, border, corner).or_else(|| {
+    // The buttons keep their own column of the top band while they are out.
+    let controls = ((*p).opacity > 0).then(|| (rect.right - paint::dimensions(dpi).0, rect.right));
+    top_frame_hit(point.x, point.y, rect.right, top, corner, controls).or_else(|| {
         // Preserve the right resize gutter even while the caption is revealed.
         (border > 0
             && point.x >= rect.right - border
@@ -1051,7 +1078,6 @@ unsafe extern "system" fn strip_proc(
             let _ = GetWindowRect((*p).edge, &mut edge);
             edge.bottom =
                 edge.top + (8.0 * GetDpiForWindow((*p).owner).max(96) as f64 / 96.0).round() as i32;
-            edge.top += resize_border((*p).owner);
             // Moving along the reveal strip must not dismiss the controls.
             let hovered = WindowFromPoint(cursor);
             let on_caption = hovered == (*p).edge || (*p).buttons.contains(&hovered);
@@ -1316,18 +1342,32 @@ mod tests {
     }
     #[test]
     fn top_resize_band_precedes_reveal_and_preserves_corners() {
-        for border in [2, 3, 4] {
-            assert_eq!(top_frame_hit(200, 0, 800, border, 16), Some(HTTOP));
-            assert_eq!(top_frame_hit(200, border - 1, 800, border, 16), Some(HTTOP));
-            assert_eq!(top_frame_hit(200, border, 800, border, 16), None);
-            assert_eq!(top_frame_hit(1, 1, 800, border, 16), Some(HTTOPLEFT));
-            assert_eq!(top_frame_hit(799, 1, 800, border, 16), Some(HTTOPRIGHT));
+        for border in [2, 3, 4, 8, 12] {
+            assert_eq!(top_frame_hit(200, 0, 800, border, 16, None), Some(HTTOP));
+            assert_eq!(
+                top_frame_hit(200, border - 1, 800, border, 16, None),
+                Some(HTTOP)
+            );
+            assert_eq!(top_frame_hit(200, border, 800, border, 16, None), None);
+            assert_eq!(top_frame_hit(1, 1, 800, border, 16, None), Some(HTTOPLEFT));
+            assert_eq!(
+                top_frame_hit(799, 1, 800, border, 16, None),
+                Some(HTTOPRIGHT)
+            );
         }
+        assert_eq!(top_frame_hit(200, 0, 800, 0, 16, None), None);
+        assert_eq!(top_frame_hit(-1, 0, 800, 8, 16, None), None);
+        assert_eq!(top_frame_hit(800, 0, 800, 8, 16, None), None);
+    }
+    #[test]
+    fn revealed_buttons_keep_their_column_of_the_top_band() {
+        // 3 buttons of 44 DIP and two paddings end at the client's right edge.
+        let controls = Some((662, 800));
+        assert_eq!(top_frame_hit(661, 0, 800, 8, 16, controls), Some(HTTOP));
+        assert_eq!(top_frame_hit(662, 0, 800, 8, 16, controls), None);
         // The top of a caption button (3 DIP inset) is never a resize target.
-        assert_eq!(top_frame_hit(760, 3, 800, 2, 16), None);
-        assert_eq!(top_frame_hit(790, 1, 800, 2, 16), Some(HTTOPRIGHT));
-        assert_eq!(top_frame_hit(200, 0, 800, 0, 16), None);
-        assert_eq!(top_frame_hit(-1, 0, 800, 8, 16), None);
-        assert_eq!(top_frame_hit(800, 0, 800, 8, 16), None);
+        assert_eq!(top_frame_hit(760, 3, 800, 8, 16, controls), None);
+        assert_eq!(top_frame_hit(799, 0, 800, 8, 16, controls), None);
+        assert_eq!(top_frame_hit(10, 7, 800, 8, 16, controls), Some(HTTOPLEFT));
     }
 }
