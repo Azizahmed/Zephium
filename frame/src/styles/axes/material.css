@@ -46,6 +46,22 @@
   --wash-launcher: 82%;
 }
 
+/* The sky: the window wears the frost of the new tab's sky, a picture small
+   enough that stretching it is the blur. Native lays it under a Mac window;
+   on Windows the chrome is the whole window and lays it itself. */
+:root[data-material="sky"] {
+  --wash-raised: 56%;
+  --wash-launcher: 56%;
+}
+
+:root[data-material="sky"] .shell[data-caption] {
+  background: url("../../shared/sky/assets/frost-night.png") center / cover;
+}
+
+:root[data-material="sky"][data-theme="light"] .shell[data-caption] {
+  background-image: url("../../shared/sky/assets/frost-day.png");
+}
+
 /* Mica is near-opaque and already dark-framed, so the wash only lays the
    theme's colour into it; any heavier and the wallpaper's hue is lost. */
 :root[data-material="mica"] {
