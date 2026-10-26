@@ -59,7 +59,7 @@ struct PaintCover {
     token: u64,
     view: Retained<NSView>,
     // A restored page's last frame fades into the live page; a plain colour
-    // cover is replaced within one frame and simply disappears.
+    // cover can hold until first paint, and fades too rather than popping.
     fades: bool,
 }
 
@@ -705,7 +705,7 @@ impl ContentStage {
             PaintCover {
                 token,
                 view: view.clone(),
-                fades: image.is_some(),
+                fades: true,
             },
         );
         drop(covers);
