@@ -525,6 +525,14 @@ unsafe fn hover_reveal(p: *mut State, hot: HWND) {
         SetTimer(Some((*p).strip), REVEAL, REVEAL_DWELL_MS, None);
     }
 }
+/// Where focus returns when the caption lets go of it.
+unsafe fn focus_target(p: *mut State) -> HWND {
+    if IsWindow(Some((*p).previous_focus)).as_bool() {
+        (*p).previous_focus
+    } else {
+        (*p).owner
+    }
+}
 unsafe fn button_at_cursor(p: *mut State) -> HWND {
     let mut cursor = POINT::default();
     let _ = GetCursorPos(&mut cursor);
@@ -1016,11 +1024,6 @@ unsafe extern "system" fn strip_proc(
             }
         }
         WM_COMMAND if (w.0 >> 16) == BN_CLICKED as usize => {
-            let target = if IsWindow(Some((*p).previous_focus)).as_bool() {
-                (*p).previous_focus
-            } else {
-                (*p).owner
-            };
             let command = match w.0 & 0xffff {
                 1 => SC_MINIMIZE,
                 2 => {
@@ -1036,7 +1039,12 @@ unsafe extern "system" fn strip_proc(
             // Retire visible pixels before focus/default-button processing,
             // including Close, which used to repaint all three child buttons.
             prepare_state_change(p);
-            let _ = SetFocus(Some(target));
+            // Only a keyboard activation leaves focus on a button. After a
+            // click the page still holds it, and focusing the owner would have
+            // wry move it to the chrome WebView.
+            if (*p).buttons.contains(&GetFocus()) {
+                let _ = SetFocus(Some(focus_target(p)));
+            }
             let _ = PostMessageW(
                 Some((*p).owner),
                 WM_SYSCOMMAND,
@@ -1148,12 +1156,7 @@ unsafe extern "system" fn button_proc(
             let _ = render(p);
         }
         WM_KEYDOWN if w.0 == VK_ESCAPE.0 as usize => {
-            let target = if IsWindow(Some((*p).previous_focus)).as_bool() {
-                (*p).previous_focus
-            } else {
-                (*p).owner
-            };
-            let _ = SetFocus(Some(target));
+            let _ = SetFocus(Some(focus_target(p)));
             transition(p, false);
             return LRESULT(0);
         }
