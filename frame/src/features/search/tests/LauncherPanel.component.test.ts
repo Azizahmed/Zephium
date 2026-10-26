@@ -620,3 +620,25 @@ test("the field names the actions sheet while it is open, and results are announ
   await reply("zzz", []);
   await expect.element(screen.getByRole("status")).toHaveTextContent("No matching results");
 });
+
+test("a list moving under a resting pointer does not move the selection", async () => {
+  const screen = await render(LauncherPanel, { props: { context, destinations } });
+  await screen.getByRole("combobox").fill("rust");
+  await reply("rust", [
+    search("rust"),
+    visit("Rust Book", "https://doc.rust-lang.org/book/"),
+    visit("Rust Blog", "https://blog.rust-lang.org/"),
+  ]);
+  const rows = [...screen.container.querySelectorAll<HTMLElement>('[role="option"]')];
+  const move = (row: HTMLElement, screenX: number, screenY: number) =>
+    row.dispatchEvent(new PointerEvent("pointermove", { bubbles: true, screenX, screenY }));
+  move(rows[1]!, 411, 233);
+  await vi.waitFor(() => expect(rows[1]!.getAttribute("aria-selected")).toBe("true"));
+  // The browser repeats the last move when content shifts under the pointer.
+  move(rows[2]!, 411, 233);
+  await new Promise((done) => setTimeout(done, 30));
+  expect(rows[1]!.getAttribute("aria-selected")).toBe("true");
+  expect(rows[2]!.getAttribute("aria-selected")).toBe("false");
+  move(rows[2]!, 415, 233);
+  await vi.waitFor(() => expect(rows[2]!.getAttribute("aria-selected")).toBe("true"));
+});
