@@ -29,7 +29,7 @@ struct State {
     expanded: bool,
     suppressed: bool,
     page_left: Option<f64>,
-    window: WebviewWindow,
+    dark: bool,
     previous_focus: HWND,
     laying_out: bool,
     hot_button: HWND,
@@ -127,7 +127,7 @@ pub fn install(window: &WebviewWindow) -> bool {
             expanded: false,
             suppressed: false,
             page_left: None,
-            window: window.clone(),
+            dark: true,
             previous_focus: HWND::default(),
             laying_out: false,
             hot_button: HWND::default(),
@@ -162,26 +162,30 @@ pub fn install(window: &WebviewWindow) -> bool {
         true
     }
 }
-/// Hides the caption and its reveal edge while page content fills the
-/// screen. Runs on the window's UI thread.
-pub fn set_suppressed(window: &WebviewWindow, suppressed: bool) {
-    let Ok(owner) = window.hwnd() else {
-        return;
-    };
+/// The live state of a window's caption, found through its subclass. Runs on
+/// the window's UI thread.
+unsafe fn state_of(window: &WebviewWindow) -> Option<*mut State> {
+    let owner = window.hwnd().ok()?;
     let mut data = 0usize;
     // SAFETY: UI-thread lookup of this module's own subclass; its data is the
     // live State pointer until WM_NCDESTROY removes the subclass.
+    (GetWindowSubclass(
+        HWND(owner.0),
+        Some(owner_proc),
+        ID,
+        Some(&mut data as *mut usize),
+    )
+    .as_bool()
+        && data != 0)
+        .then_some(data as *mut State)
+}
+
+/// Hides the caption and its reveal edge while page content fills the
+/// screen. Runs on the window's UI thread.
+pub fn set_suppressed(window: &WebviewWindow, suppressed: bool) {
+    // SAFETY: see `state_of`.
     unsafe {
-        if GetWindowSubclass(
-            HWND(owner.0),
-            Some(owner_proc),
-            ID,
-            Some(&mut data as *mut usize),
-        )
-        .as_bool()
-            && data != 0
-        {
-            let state = data as *mut State;
+        if let Some(state) = state_of(window) {
             (*state).suppressed = suppressed;
             layout(state);
         }
@@ -191,18 +195,26 @@ pub fn set_suppressed(window: &WebviewWindow, suppressed: bool) {
 /// The shell's admitted chrome boundary, in logical coordinates. Internal
 /// pages need only the corner controls; web pages get a band over the page.
 pub fn set_page_left(window: &WebviewWindow, page_left: Option<f64>) {
-    let Ok(owner) = window.hwnd() else {
-        return;
-    };
+    // SAFETY: see `state_of`.
     unsafe {
-        let mut data = 0usize;
-        if GetWindowSubclass(HWND(owner.0), Some(owner_proc), ID, Some(&mut data)).as_bool()
-            && data != 0
-        {
-            let state = data as *mut State;
+        if let Some(state) = state_of(window) {
             if (*state).page_left != page_left {
                 (*state).page_left = page_left;
                 layout(state);
+            }
+        }
+    }
+}
+
+/// The appearance the app resolved for the window, which the paint path reads
+/// instead of asking the window for its theme in the middle of a message.
+pub fn set_dark(window: &WebviewWindow, dark: bool) {
+    // SAFETY: see `state_of`.
+    unsafe {
+        if let Some(state) = state_of(window) {
+            if (*state).dark != dark {
+                (*state).dark = dark;
+                let _ = render(state);
             }
         }
     }
@@ -227,7 +239,7 @@ unsafe fn render(p: *mut State) -> bool {
     let index = |hwnd| (*p).buttons.iter().position(|button| *button == hwnd);
     let appearance = paint::Appearance {
         dpi,
-        dark: !matches!((*p).window.theme(), Ok(tauri::Theme::Light)),
+        dark: (*p).dark,
         active: foreground == (*p).owner || foreground == (*p).edge,
         maximized: IsZoomed((*p).owner).as_bool(),
         hot: index((*p).hot_button),

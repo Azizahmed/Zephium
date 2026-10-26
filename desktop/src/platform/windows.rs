@@ -517,6 +517,7 @@ pub fn apply_material(window: &WebviewWindow, dark: bool) -> bool {
         None => (245, 245, 249, 96),
     };
     set_dark_frame(window, dark);
+    caption::set_dark(window, dark);
     // Use the fallible native adapter directly; the Tauri effect dispatcher
     // discards the underlying DWM error and can falsely report acrylic.
     let contrast = menus::high_contrast()
