@@ -33,6 +33,7 @@ struct State {
     expanded: bool,
     suppressed: bool,
     reveal_armed: bool,
+    menu_open: bool,
     // Where the pointer was when a window state change retired the caption.
     // Hover is ignored until it leaves, or the caption would return at once
     // under a pointer that has not moved.
@@ -136,6 +137,7 @@ pub fn install(window: &WebviewWindow) -> bool {
             expanded: false,
             suppressed: false,
             reveal_armed: false,
+            menu_open: false,
             reveal_block: None,
             page_left: None,
             dark: true,
@@ -176,17 +178,13 @@ pub fn install(window: &WebviewWindow) -> bool {
 /// The live state of a window's caption, found through its subclass. Runs on
 /// the window's UI thread.
 unsafe fn state_of(window: &WebviewWindow) -> Option<*mut State> {
-    let owner = window.hwnd().ok()?;
+    installed_state(HWND(window.hwnd().ok()?.0))
+}
+unsafe fn installed_state(owner: HWND) -> Option<*mut State> {
     let mut data = 0usize;
     // SAFETY: UI-thread lookup of this module's own subclass; its data is the
     // live State pointer until WM_NCDESTROY removes the subclass.
-    (GetWindowSubclass(
-        HWND(owner.0),
-        Some(owner_proc),
-        ID,
-        Some(&mut data as *mut usize),
-    )
-    .as_bool()
+    (GetWindowSubclass(owner, Some(owner_proc), ID, Some(&mut data as *mut usize)).as_bool()
         && data != 0)
         .then_some(data as *mut State)
 }
@@ -579,6 +577,67 @@ unsafe fn focus_target(p: *mut State) -> HWND {
         (*p).owner
     }
 }
+/// What the system menu offers for a window's styles and state, which Windows
+/// only refreshes for a menu it opens itself.
+fn system_menu_items(style: u32, zoomed: bool) -> [(u32, bool); 5] {
+    [
+        (SC_RESTORE, zoomed),
+        (SC_MOVE, !zoomed),
+        (SC_SIZE, !zoomed && style & WS_THICKFRAME.0 != 0),
+        (SC_MINIMIZE, style & WS_MINIMIZEBOX.0 != 0),
+        (SC_MAXIMIZE, !zoomed && style & WS_MAXIMIZEBOX.0 != 0),
+    ]
+}
+/// The owner's system menu at a screen position, with the chosen command sent
+/// as it would be from a native caption.
+unsafe fn show_system_menu(p: *mut State, at: POINT) {
+    let owner = (*p).owner;
+    if (*p).menu_open || (*p).changing_state || (*p).sizing {
+        return;
+    }
+    let menu = GetSystemMenu(owner, false);
+    if menu.is_invalid() {
+        return;
+    }
+    let zoomed = IsZoomed(owner).as_bool();
+    let style = GetWindowLongPtrW(owner, GWL_STYLE) as u32;
+    for (command, enabled) in system_menu_items(style, zoomed) {
+        let state = if enabled { MF_ENABLED } else { MF_GRAYED };
+        let _ = EnableMenuItem(menu, command, MF_BYCOMMAND | state);
+    }
+    let _ = SetMenuDefaultItem(menu, if zoomed { SC_RESTORE } else { SC_CLOSE }, 0);
+    (*p).menu_open = true;
+    let _ = SetForegroundWindow(owner);
+    let align = if GetSystemMetrics(SM_MENUDROPALIGNMENT) != 0 {
+        TPM_RIGHTALIGN
+    } else {
+        TPM_LEFTALIGN
+    };
+    let command = TrackPopupMenu(
+        menu,
+        TPM_RETURNCMD | TPM_RIGHTBUTTON | align,
+        at.x,
+        at.y,
+        None,
+        owner,
+        None,
+    )
+    .0 as u32;
+    // The menu runs its own message loop, and the window can be destroyed in it.
+    if installed_state(owner) != Some(p) {
+        return;
+    }
+    (*p).menu_open = false;
+    SetTimer(Some((*p).strip), HIDE, 450, None);
+    if command != 0 {
+        let _ = PostMessageW(
+            Some(owner),
+            WM_SYSCOMMAND,
+            WPARAM(command as usize),
+            LPARAM(((at.y as u16 as u32) << 16 | at.x as u16 as u32) as isize),
+        );
+    }
+}
 unsafe fn button_at_cursor(p: *mut State) -> HWND {
     let mut cursor = POINT::default();
     let _ = GetCursorPos(&mut cursor);
@@ -817,6 +876,12 @@ unsafe extern "system" fn edge_proc(
             let _ = ReleaseCapture();
             return LRESULT(0);
         }
+        WM_RBUTTONUP => {
+            let mut point = POINT::default();
+            let _ = GetCursorPos(&mut point);
+            show_system_menu(p, point);
+            return LRESULT(0);
+        }
         WM_LBUTTONDBLCLK => {
             let command = if IsZoomed((*p).owner).as_bool() {
                 SC_RESTORE
@@ -988,6 +1053,12 @@ unsafe extern "system" fn strip_proc(
         WM_NCLBUTTONDOWN | WM_NCLBUTTONDBLCLK if w.0 == HTCAPTION as usize => {
             return SendMessageW((*p).owner, msg, Some(w), Some(l));
         }
+        WM_NCRBUTTONUP if w.0 == HTCAPTION as usize => {
+            let mut point = POINT::default();
+            let _ = GetCursorPos(&mut point);
+            show_system_menu(p, point);
+            return LRESULT(0);
+        }
         WM_NCLBUTTONDOWN if resize_direction(w.0 as u32).is_some() => {
             let _ = ReleaseCapture();
             let _ = PostMessageW(
@@ -1063,6 +1134,7 @@ unsafe extern "system" fn strip_proc(
             // Release, focus loss and the end of the move loop reschedule the
             // dismissal. No polling timer runs while a gesture owns the band.
             if (*p).sizing
+                || (*p).menu_open
                 || !(*p).pressed_button.0.is_null()
                 || (*p).drag_start.is_some()
                 || (*p).buttons.contains(&GetFocus())
@@ -1317,6 +1389,20 @@ mod tests {
         assert_eq!(button_hit(&rects, POINT { x: 940, y: 1 }), Some(1));
         assert_eq!(button_hit(&rects, POINT { x: 999, y: 29 }), None);
         assert_eq!(button_hit(&rects, POINT { x: 864, y: 0 }), None);
+    }
+    #[test]
+    fn the_system_menu_offers_what_the_window_can_do() {
+        let all = WS_MINIMIZEBOX.0 | WS_MAXIMIZEBOX.0 | WS_THICKFRAME.0;
+        let offered = |style, zoomed| system_menu_items(style, zoomed).map(|(_, enabled)| enabled);
+        // Restore, Move, Size, Minimize, Maximize.
+        assert_eq!(offered(all, false), [false, true, true, true, true]);
+        assert_eq!(offered(all, true), [true, false, false, true, false]);
+        assert_eq!(
+            offered(WS_THICKFRAME.0, false),
+            [false, true, true, false, false]
+        );
+        assert_eq!(offered(0, false), [false, true, false, false, false]);
+        assert_eq!(system_menu_items(all, false)[0].0, SC_RESTORE);
     }
     #[test]
     fn minimize_and_maximize_follow_the_window_styles() {
