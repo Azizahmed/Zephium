@@ -116,18 +116,22 @@
       : null,
   );
 
+  /** A page's address is edited in the launcher, which has room for what a
+   *  sidebar-wide field cannot show; the field stays the page's identity.
+   *  False where there is no page to edit and the field takes the typing. */
+  function editInLauncher(): boolean {
+    const tab = tabs.activeTab();
+    if (!tab?.url || (tab.content ?? "web") !== "web") return false;
+    // Work has no page in front, so there the launcher opens empty.
+    if (surface.currentPage() === "work") void commands.runCommand("launcher.toggle");
+    else void commands.launcherEdit(tab.id, tab.url);
+    return true;
+  }
+
   $effect(() => {
     const command = ui.uiCommand();
     if (command.seq === 0 || command.id !== "url.focus" || input === undefined) return;
-    // At rail width the field is not drawn; the launcher stands in for it.
-    const tab = untrack(() => tabs.activeTab());
-    if (compact && tab?.url && (tab.content ?? "web") === "web") {
-      // Work has no page in front, so there the launcher opens empty.
-      if (untrack(() => surface.currentPage()) === "work")
-        void commands.runCommand("launcher.toggle");
-      else void commands.launcherEdit(tab.id, tab.url);
-      return;
-    }
+    if (untrack(editInLauncher)) return;
     input.focus();
     input.select();
   });
@@ -264,10 +268,19 @@
     convention. The message is announced rather than drawn: a block of text
     appearing under the address bar would push the whole chrome down.
   -->
+  <!-- svelte-ignore a11y_no_static_element_interactions: the press only
+       routes a pointer to the launcher; the keyboard edits in the field. -->
   <div
     class:sr-only={compact}
     class:flex={!compact}
     class:shadow-[inset_0_0_0_1px_var(--color-danger)]={failed}
+    onpointerdown={(event) => {
+      // A click on the address opens the launcher; the field's own buttons
+      // and a field already being typed in keep their clicks.
+      if (event.button !== 0 || editing || finding) return;
+      if (event.target instanceof Element && event.target.closest("button, a")) return;
+      if (editInLauncher()) event.preventDefault();
+    }}
     class="address-field h-[34px] items-center gap-2 rounded-row bg-address ps-2.5 pe-1 shadow-[var(--shadow-tile)] transition-[background-color,box-shadow] duration-[var(--motion-fast)] ease-[var(--ease-out)] [--address-centering:20px] focus-within:bg-address-hover focus-within:shadow-[var(--shadow-field-focus)] hover:bg-address-hover"
   >
     {#if !compact && activeCapture && !editing}
