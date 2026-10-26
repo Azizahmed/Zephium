@@ -8,7 +8,11 @@ mod model;
 mod viewport;
 use model::{Model, Owner};
 use std::sync::{Arc, Mutex};
-use tauri::{LogicalSize, Manager, PhysicalPosition, WebviewWindow};
+#[cfg(not(target_os = "macos"))]
+use tauri::PhysicalPosition;
+#[cfg(target_os = "windows")]
+use tauri::PhysicalSize;
+use tauri::{LogicalSize, Manager, WebviewWindow};
 #[cfg(target_os = "macos")]
 use zephium_core::ports::store::Store;
 use zephium_ipc::{
@@ -562,7 +566,36 @@ impl Overlay {
         idle::destroyed();
     }
     /// Places the launcher on the display under the pointer, where the user is
+    /// looking, at the same height every time. Everything is in points: the
+    /// pointer, the displays and the frame are AppKit's own, so displays of
+    /// different scale are never converted between.
+    #[cfg(target_os = "macos")]
+    fn place(&self) {
+        let Some(work) = crate::panel::work_area(&self.window) else {
+            return;
+        };
+        let placement = geometry::Placement::new(
+            work.width,
+            work.height,
+            if animated_shapes() {
+                geometry::SHAPE_INSET
+            } else {
+                0.0
+            },
+        );
+        let height = placement.height(self.state().content_height);
+        crate::panel::place(
+            &self.window,
+            work.left + placement.x,
+            work.top - placement.y,
+            placement.width,
+            height,
+        );
+        self.state().placement = Some(placement);
+    }
+    /// Places the launcher on the display under the pointer, where the user is
     /// looking, at the same height every time.
+    #[cfg(not(target_os = "macos"))]
     fn place(&self) {
         let monitor = self
             .window
@@ -601,23 +634,40 @@ impl Overlay {
                 0.0
             },
         );
+        let height = placement.height(self.state().content_height);
+        // Windows rescales a window that lands on a display of another scale,
+        // so it moves first and is then sized in that display's own units.
+        // Sized in the previous display's units, its viewport and clip were
+        // wrong after the first crossing.
         #[cfg(target_os = "windows")]
         {
-            let _ = self.window.as_ref().set_bounds(tauri::Rect {
-                position: tauri::LogicalPosition::new(0.0, 0.0).into(),
-                size: LogicalSize::new(placement.width, placement.height(geometry::MAX_HEIGHT))
-                    .into(),
-            });
-        }
-        let height = placement.height(self.state().content_height);
-        let _ = self
-            .window
-            .set_size(LogicalSize::new(placement.width, height));
-        if position_supported() {
             let _ = self.window.set_position(PhysicalPosition::new(
                 f64::from(work.position.x) + placement.x * scale,
                 f64::from(work.position.y) + placement.y * scale,
             ));
+            let _ = self.window.as_ref().set_bounds(tauri::Rect {
+                position: PhysicalPosition::new(0.0, 0.0).into(),
+                size: PhysicalSize::new(
+                    placement.width * scale,
+                    placement.height(geometry::MAX_HEIGHT) * scale,
+                )
+                .into(),
+            });
+            let _ = self
+                .window
+                .set_size(PhysicalSize::new(placement.width * scale, height * scale));
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            let _ = self
+                .window
+                .set_size(LogicalSize::new(placement.width, height));
+            if position_supported() {
+                let _ = self.window.set_position(PhysicalPosition::new(
+                    f64::from(work.position.x) + placement.x * scale,
+                    f64::from(work.position.y) + placement.y * scale,
+                ));
+            }
         }
         self.state().placement = Some(placement);
     }
@@ -745,15 +795,9 @@ pub fn update_context(app: &tauri::AppHandle, context: &PanelOwner) {
     }
 }
 
+#[cfg(target_os = "linux")]
 fn position_supported() -> bool {
-    #[cfg(target_os = "linux")]
-    {
-        std::env::var_os("WAYLAND_DISPLAY").is_none()
-    }
-    #[cfg(not(target_os = "linux"))]
-    {
-        true
-    }
+    std::env::var_os("WAYLAND_DISPLAY").is_none()
 }
 fn do_hide(window: &WebviewWindow) {
     #[cfg(target_os = "macos")]
