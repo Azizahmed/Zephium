@@ -159,6 +159,22 @@ test("Enter runs what was typed even when a local match exists", async () => {
   );
 });
 
+test("Enter pressed before the answer runs what was typed once it lands", async () => {
+  const screen = await mount({ tabId: "tab" });
+  const input = screen.getByRole("combobox");
+  await input.fill("rus");
+  await reply("rus", [search("rus")]);
+  // The list still shows the answer for "rus" when Enter is pressed.
+  const seen = issued();
+  await userEvent.type(input, "t");
+  await userEvent.keyboard("{Enter}");
+  expect(native.run).not.toHaveBeenCalled();
+  const context = await replyToNew(seen, "rust", [search("rust")]);
+  await vi.waitFor(() =>
+    expect(native.run).toHaveBeenCalledExactlyOnceWith(search("rust").action, context),
+  );
+});
+
 test("selection moves without wrapping and returns to the typed action", async () => {
   const screen = await mount({ tabId: "tab" });
   await screen.getByRole("combobox").fill("rust");

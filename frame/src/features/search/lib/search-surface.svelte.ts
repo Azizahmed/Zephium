@@ -343,7 +343,10 @@ export function createSearchSurface(options: {
     }
     // Sending something behind the current tab is a deliberate choice about
     // a row the user can see; it is never deferred onto an answer they cannot.
-    if (query.trim() && !background) queued = row?.id ?? "";
+    // Until the user aims at a row, the row on screen is the previous query's
+    // typed action, whose identity carries the previous text. Queuing that id
+    // would match nothing in the answer and drop the Enter.
+    if (query.trim() && !background) queued = moved ? (row?.id ?? "") : "";
   }
 
   async function copy() {
