@@ -21,6 +21,10 @@ const ID: usize = 0x5a434150;
 const HIDE: usize = ID + 1;
 const FADE: usize = ID + 2;
 const CLOSE_SETTLED: usize = ID + 3;
+const REVEAL: usize = ID + 4;
+// The pointer must rest on the reveal edge this long before the caption
+// slides in, so passing over it on the way elsewhere reveals nothing.
+const REVEAL_DWELL_MS: u32 = 150;
 struct State {
     owner: HWND,
     strip: HWND,
@@ -28,6 +32,7 @@ struct State {
     buttons: [HWND; 3],
     expanded: bool,
     suppressed: bool,
+    reveal_armed: bool,
     page_left: Option<f64>,
     dark: bool,
     previous_focus: HWND,
@@ -126,6 +131,7 @@ pub fn install(window: &WebviewWindow) -> bool {
             buttons,
             expanded: false,
             suppressed: false,
+            reveal_armed: false,
             page_left: None,
             dark: true,
             previous_focus: HWND::default(),
@@ -310,6 +316,7 @@ unsafe fn layout(p: *mut State) {
         if capture == (*p).edge || (*p).buttons.contains(&capture) {
             let _ = ReleaseCapture();
         }
+        cancel_reveal(p);
         let _ = KillTimer(Some((*p).strip), FADE);
         let _ = KillTimer(Some((*p).strip), HIDE);
     }
@@ -433,6 +440,7 @@ unsafe fn prepare_state_change(p: *mut State) {
     (*p).pressed_button = HWND::default();
     (*p).drag_start = None;
     (*p).motion_paused = None;
+    cancel_reveal(p);
     zephium_engine::set_window_caption_offset((*p).owner.0 as isize, 0.0, false);
     let _ = KillTimer(Some((*p).strip), FADE);
     let _ = KillTimer(Some((*p).strip), HIDE);
@@ -465,6 +473,27 @@ unsafe fn reveal(p: *mut State) {
     }
     let _ = KillTimer(Some((*p).strip), HIDE);
     transition(p, true);
+}
+unsafe fn cancel_reveal(p: *mut State) {
+    if (*p).reveal_armed {
+        (*p).reveal_armed = false;
+        let _ = KillTimer(Some((*p).strip), REVEAL);
+    }
+}
+/// Hovering the reveal edge asks for the caption after a short dwell. With the
+/// caption out, or the pointer on Maximize (the shell's Snap flyout opens from
+/// it), hovering holds it without waiting.
+unsafe fn hover_reveal(p: *mut State, hot: HWND) {
+    if (*p).suppressed || (*p).changing_state || (*p).sizing {
+        return;
+    }
+    if (*p).expanded || hot == (*p).buttons[1] {
+        cancel_reveal(p);
+        reveal(p);
+    } else if !(*p).reveal_armed {
+        (*p).reveal_armed = true;
+        SetTimer(Some((*p).strip), REVEAL, REVEAL_DWELL_MS, None);
+    }
 }
 unsafe fn button_at_cursor(p: *mut State) -> HWND {
     let mut cursor = POINT::default();
@@ -573,6 +602,7 @@ unsafe fn pointer_input(
                 if (point.x - start.x).abs() >= GetSystemMetrics(SM_CXDRAG)
                     || (point.y - start.y).abs() >= GetSystemMetrics(SM_CYDRAG)
                 {
+                    cancel_reveal(p);
                     (*p).drag_start = None;
                     let _ = ReleaseCapture();
                     let _ = PostMessageW(
@@ -584,9 +614,9 @@ unsafe fn pointer_input(
                     return Some(LRESULT(0));
                 }
             }
-            reveal(p);
             track(hwnd, msg == WM_NCMOUSEMOVE);
             let hot = button_at_cursor(p);
+            hover_reveal(p, hot);
             update_hot(p, hot);
             if hot == (*p).buttons[1] && msg == WM_NCMOUSEMOVE {
                 // Let the owner offer Snap layouts; clicks stay on our explicit
@@ -596,6 +626,7 @@ unsafe fn pointer_input(
             return Some(LRESULT(0));
         }
         WM_MOUSELEAVE | WM_NCMOUSELEAVE => {
+            cancel_reveal(p);
             update_hot(p, HWND::default());
             SetTimer(Some((*p).strip), HIDE, 450, None);
         }
@@ -665,6 +696,8 @@ unsafe extern "system" fn edge_proc(
             let mut point = POINT::default();
             let _ = GetCursorPos(&mut point);
             let _ = SetForegroundWindow((*p).owner);
+            cancel_reveal(p);
+            reveal(p);
             (*p).drag_start = Some(point);
             pause_motion(p);
             SetCapture(hwnd);
@@ -870,15 +903,27 @@ unsafe extern "system" fn strip_proc(
             return LRESULT(0);
         }
         WM_MOUSEMOVE => {
-            reveal(p);
+            hover_reveal(p, HWND::default());
             track(hwnd, false);
         }
         WM_NCMOUSEMOVE => {
-            reveal(p);
+            hover_reveal(p, HWND::default());
             track(hwnd, true);
         }
         WM_MOUSELEAVE | WM_NCMOUSELEAVE => {
+            cancel_reveal(p);
             SetTimer(Some(hwnd), HIDE, 450, None);
+        }
+        WM_TIMER if w.0 == REVEAL => {
+            let _ = KillTimer(Some(hwnd), REVEAL);
+            (*p).reveal_armed = false;
+            let mut cursor = POINT::default();
+            let _ = GetCursorPos(&mut cursor);
+            let hovered = WindowFromPoint(cursor);
+            if hovered == (*p).edge || (*p).buttons.contains(&hovered) {
+                reveal(p);
+            }
+            return LRESULT(0);
         }
         WM_TIMER if w.0 == FADE => {
             // A press owns a stable target even when it begins mid-reveal.
@@ -975,6 +1020,7 @@ unsafe extern "system" fn strip_proc(
         WM_NCDESTROY => {
             let _ = KillTimer(Some(hwnd), HIDE);
             let _ = KillTimer(Some(hwnd), FADE);
+            let _ = KillTimer(Some(hwnd), REVEAL);
             let _ = RemoveWindowSubclass(hwnd, Some(strip_proc), ID);
         }
         _ => {}
