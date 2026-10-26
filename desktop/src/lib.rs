@@ -643,11 +643,11 @@ fn on_main_window_mapped(window: &WebviewWindow) {
     linux_global_shortcuts::main_window_mapped(window);
 }
 
+/// DWM can discard the backdrop installed while the window was hidden.
+/// Restore it at the first reveal, not at some later focus event, and use
+/// the person's saved appearance rather than the operating-system default.
 #[cfg(target_os = "windows")]
-fn on_main_window_mapped(window: &WebviewWindow) {
-    // DWM can discard the backdrop installed while the window was hidden.
-    // Restore it at the first reveal, not at some later focus event, and use
-    // the person's saved appearance rather than the operating-system default.
+pub(crate) fn restore_window_material(window: &WebviewWindow) -> bool {
     let appearance = APP_STORE
         .get()
         .and_then(|store| store.app_setting("appearance"))
@@ -656,7 +656,12 @@ fn on_main_window_mapped(window: &WebviewWindow) {
         resolved_native_theme(window, &appearance),
         tauri::Theme::Dark
     );
-    if !platform::imp::apply_material(window, dark) {
+    platform::imp::apply_material(window, dark)
+}
+
+#[cfg(target_os = "windows")]
+fn on_main_window_mapped(window: &WebviewWindow) {
+    if !restore_window_material(window) {
         diagnostic!("material: main-window backdrop could not be restored after initial reveal");
     }
 }

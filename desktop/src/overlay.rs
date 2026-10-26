@@ -64,6 +64,10 @@ struct State {
     focus_timer: bool,
     closed: bool,
     suspending: bool,
+    /// DWM can discard a backdrop installed while the window was hidden, and
+    /// this one was; it is put back once, when the window first appears.
+    #[cfg(target_os = "windows")]
+    material_restored: bool,
 }
 impl State {
     /// A new presentation never inherits an action still awaiting settlement.
@@ -115,6 +119,8 @@ impl Overlay {
                 focus_timer: false,
                 closed: false,
                 suspending: false,
+                #[cfg(target_os = "windows")]
+                material_restored: false,
             })),
         };
         #[cfg(target_os = "macos")]
@@ -436,6 +442,17 @@ impl Overlay {
         {
             let _ = self.window.show();
             let _ = self.window.set_focus();
+        }
+        #[cfg(target_os = "windows")]
+        self.restore_material();
+    }
+    #[cfg(target_os = "windows")]
+    fn restore_material(&self) {
+        let first = !std::mem::replace(&mut self.state().material_restored, true);
+        if first && !crate::restore_window_material(&self.window) {
+            crate::write_diagnostic(format_args!(
+                "material: launcher backdrop could not be restored after first reveal"
+            ));
         }
     }
     pub fn search_context(&self, request_id: &str) -> Option<SearchContext> {
