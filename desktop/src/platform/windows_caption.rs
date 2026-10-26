@@ -25,6 +25,16 @@ const REVEAL: usize = ID + 4;
 // The pointer must rest on the reveal edge this long before the caption
 // slides in, so passing over it on the way elsewhere reveals nothing.
 const REVEAL_DWELL_MS: u32 = 150;
+/// Why the caption is out of the way. Each holder clears only its own, so a
+/// page leaving fullscreen cannot unhide the caption of a window the person
+/// had made fullscreen.
+#[derive(Clone, Copy)]
+pub enum Suppression {
+    /// A page holds the screen.
+    Content = 1,
+    /// The person made the window itself fullscreen.
+    Window = 2,
+}
 struct State {
     owner: HWND,
     strip: HWND,
@@ -32,6 +42,7 @@ struct State {
     buttons: [HWND; 3],
     expanded: bool,
     suppressed: bool,
+    suppressions: u8,
     reveal_armed: bool,
     menu_open: bool,
     // The window state the buttons' accessible names were last set for.
@@ -138,6 +149,7 @@ pub fn install(window: &WebviewWindow) -> bool {
             buttons,
             expanded: false,
             suppressed: false,
+            suppressions: 0,
             reveal_armed: false,
             menu_open: false,
             named: None,
@@ -194,11 +206,17 @@ unsafe fn installed_state(owner: HWND) -> Option<*mut State> {
 
 /// Hides the caption and its reveal edge while page content fills the
 /// screen. Runs on the window's UI thread.
-pub fn set_suppressed(window: &WebviewWindow, suppressed: bool) {
+pub fn set_suppressed(window: &WebviewWindow, cause: Suppression, suppressed: bool) {
     // SAFETY: see `state_of`.
     unsafe {
         if let Some(state) = state_of(window) {
-            (*state).suppressed = suppressed;
+            let causes = (*state).suppressions;
+            (*state).suppressions = if suppressed {
+                causes | cause as u8
+            } else {
+                causes & !(cause as u8)
+            };
+            (*state).suppressed = (*state).suppressions != 0;
             layout(state);
         }
     }

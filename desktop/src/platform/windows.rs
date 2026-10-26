@@ -479,7 +479,12 @@ impl From<windows::core::Error> for StartupFailure {
 
 /// Keeps the window's own caption out of a page that fills the screen.
 pub fn set_caption_suppressed(window: &WebviewWindow, suppressed: bool) {
-    caption::set_suppressed(window, suppressed);
+    caption::set_suppressed(window, caption::Suppression::Content, suppressed);
+}
+
+/// Keeps the caption out of a window the person made fullscreen themselves.
+pub fn set_caption_window_fullscreen(window: &WebviewWindow, fullscreen: bool) {
+    caption::set_suppressed(window, caption::Suppression::Window, fullscreen);
 }
 
 // Undecorated windows lose DWM rounding unless asked for explicitly.
