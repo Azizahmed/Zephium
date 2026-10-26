@@ -955,6 +955,29 @@ impl Shell {
                 }
                 let _ = self.relayout_with(animate);
             }
+            Command::SetSidebarHidden(hidden) => {
+                let Some(win) = self.windows.focused_mut() else {
+                    return;
+                };
+                if win.metrics.sidebar_hidden == hidden {
+                    return;
+                }
+                win.metrics.sidebar_hidden = hidden;
+                let id = win.id;
+                if !hidden {
+                    let _ = self.engine.raise_chrome(id, false);
+                }
+                let _ = self.engine.hint_stage_motion(id, StageMotion::Slide);
+                let _ = self.relayout_with(true);
+            }
+            Command::PeekSidebar(peek) => {
+                if let Some(win) = self.windows.focused() {
+                    // Only a hidden sidebar is beneath the page to come over it.
+                    if !peek || win.metrics.sidebar_hidden {
+                        let _ = self.engine.raise_chrome(win.id, peek);
+                    }
+                }
+            }
             Command::SetPagePermissionCardHost(available) => {
                 self.set_page_permission_card_host(available)
             }

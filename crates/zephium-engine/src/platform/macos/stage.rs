@@ -31,7 +31,7 @@ use zephium_core::split::{self, Divider, Pane};
 
 use crate::pane_geometry::rounded_native_size;
 
-use super::pointer_cover::PointerCover;
+use super::pointer_cover::{Parked, PointerCover};
 
 /// A page a drop preview slid aside, and how far.
 type Displaced = (ItemId, (f64, f64));
@@ -194,6 +194,8 @@ pub struct StageIvars {
     divider_tracking: RefCell<Vec<(NSRect, Retained<NSTrackingArea>)>>,
     tracking_busy: Cell<bool>,
     pointer_cover: RefCell<Option<PointerCover>>,
+    /// The pages, parked while a hidden sidebar's chrome is over them.
+    under_chrome: RefCell<Option<Parked>>,
     covers: RefCell<HashMap<ItemId, PaintCover>>,
     indicator: RefCell<Option<Retained<NSView>>>,
     /// A drop target the pointer has reached but not yet rested on.
@@ -809,6 +811,68 @@ impl ContentStage {
         }
         let cover = PointerCover::attach(self);
         *self.ivars().pointer_cover.borrow_mut() = cover;
+    }
+
+    /// Stacks the chrome over this stage while a hidden sidebar is shown, or
+    /// back beneath it. The views are reordered where they are, never taken
+    /// out of the window, so no page sees itself leave it; and the pages stop
+    /// setting the cursor while the chrome is over them.
+    pub fn raise_chrome(&self, raised: bool) {
+        // SAFETY: retained parent access on the AppKit main thread.
+        let Some(parent) = (unsafe { self.superview() }) else {
+            return;
+        };
+        let mut order: Vec<Retained<NSView>> = parent.subviews().to_vec();
+        let Some(chrome) = order
+            .iter()
+            .position(|view| view.downcast_ref::<wry::WryWebView>().is_some())
+        else {
+            return;
+        };
+        let Some(stage) = order.iter().position(|view| std::ptr::eq(&**view, &**self)) else {
+            return;
+        };
+        if (chrome > stage) != raised {
+            let view = order.remove(chrome);
+            let stage = order
+                .iter()
+                .position(|view| std::ptr::eq(&**view, &**self))
+                .unwrap_or(order.len());
+            order.insert(if raised { stage + 1 } else { stage }, view);
+            let ranks: HashMap<usize, usize> = order
+                .iter()
+                .enumerate()
+                .map(|(rank, view)| (std::ptr::from_ref(&**view).addr(), rank))
+                .collect();
+            unsafe extern "C-unwind" fn by_rank(
+                a: NonNull<NSView>,
+                b: NonNull<NSView>,
+                ranks: *mut std::ffi::c_void,
+            ) -> objc2_foundation::NSComparisonResult {
+                // SAFETY: `ranks` is the map below, alive for the whole sort.
+                let ranks = unsafe { &*(ranks as *const HashMap<usize, usize>) };
+                let rank = |view: NonNull<NSView>| ranks.get(&view.addr().get()).copied();
+                rank(a).cmp(&rank(b)).into()
+            }
+            // SAFETY: the comparator reads only `ranks`, which outlives the
+            // call; AppKit sorts the subviews array in place.
+            unsafe {
+                parent.sortSubviewsUsingFunction_context(
+                    by_rank,
+                    std::ptr::from_ref(&ranks) as *mut std::ffi::c_void,
+                );
+            }
+        }
+        let parked = raised.then(|| {
+            let views = self.ivars().views.borrow();
+            Parked::hold(views.values().filter_map(|host| {
+                host.view
+                    .downcast_ref::<wry::WryWebView>()
+                    .map(|page| page.retain())
+            }))
+        });
+        drop(self.ivars().under_chrome.replace(parked));
+        self.sync_pointer_cover();
     }
 
     fn sync_pointer_cover(&self) {

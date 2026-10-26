@@ -479,6 +479,10 @@ pub enum Command {
     /// shape — a toggle, a snap, a tool opening — that the content should
     /// travel with, rather than by a drag that it should simply follow.
     SetSidebarWidth(f64, bool),
+    /// The sidebar is put away, the page taking the window, or brought back.
+    SetSidebarHidden(bool),
+    /// A hidden sidebar comes over the page, or goes back beneath it.
+    PeekSidebar(bool),
     /// Transient Windows resize feedback only; no width or layout mutation.
     SidebarResizeGuide(Option<f64>),
     /// Whether the expanded sidebar is on screen to show a page-permission

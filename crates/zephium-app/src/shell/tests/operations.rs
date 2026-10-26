@@ -1201,6 +1201,59 @@ fn sidebar_shape_slides_precede_layout() {
 }
 
 #[test]
+fn a_hidden_sidebar_gives_the_page_the_window_and_comes_over_it_on_request() {
+    let (mut shell, engine, screen) = setup();
+    shell.handle(Command::Bootstrap);
+    let id = active_id(&screen);
+    navigate_and_commit(&mut shell, id, "hidden.example");
+    let window = shell.windows.focused().unwrap().id;
+    let raises = |engine: &FakeEngine| {
+        engine
+            .calls()
+            .into_iter()
+            .filter(|call| call.starts_with("raise@"))
+            .collect::<Vec<_>>()
+    };
+
+    // A sidebar that is shown has nothing beneath the page to bring up.
+    shell.handle(Command::PeekSidebar(true));
+    assert!(raises(&engine).is_empty());
+
+    shell.handle(Command::SetSidebarHidden(true));
+    let region = engine
+        .layout_regions
+        .lock()
+        .unwrap()
+        .last()
+        .copied()
+        .flatten();
+    assert_eq!(region.map(|region| region.x), Some(8.0));
+
+    shell.handle(Command::PeekSidebar(true));
+    shell.handle(Command::PeekSidebar(false));
+    // Showing the sidebar again always puts its chrome back beneath.
+    shell.handle(Command::PeekSidebar(true));
+    shell.handle(Command::SetSidebarHidden(false));
+    assert_eq!(
+        raises(&engine),
+        [
+            format!("raise@{window} true"),
+            format!("raise@{window} false"),
+            format!("raise@{window} true"),
+            format!("raise@{window} false"),
+        ]
+    );
+    let region = engine
+        .layout_regions
+        .lock()
+        .unwrap()
+        .last()
+        .copied()
+        .flatten();
+    assert!(region.is_some_and(|region| region.x > 8.0));
+}
+
+#[test]
 fn sidebar_resize_guide_does_not_mutate_width_or_layout() {
     let (mut shell, engine, _) = setup();
     shell.handle(Command::Bootstrap);
