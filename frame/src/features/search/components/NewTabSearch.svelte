@@ -142,6 +142,7 @@
         maxlength: 2048,
         spellcheck: false,
         autocapitalize: "off",
+        autocorrect: "off",
         // Room for the clear control, which is placed over the field rather
         // than threaded through the shared primitive for one caller's sake.
         style: surface.query ? "padding-inline-end: 40px" : undefined,

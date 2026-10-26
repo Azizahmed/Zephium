@@ -353,6 +353,7 @@
       maxlength={2048}
       autocomplete="off"
       autocapitalize="off"
+      autocorrect="off"
       spellcheck={false}
       placeholder={m.panel_search_placeholder()}
       aria-label={m.panel_search_placeholder()}
