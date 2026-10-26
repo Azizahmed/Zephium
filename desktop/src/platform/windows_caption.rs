@@ -5,7 +5,7 @@
 #[path = "windows_caption_paint.rs"]
 mod paint;
 use tauri::WebviewWindow;
-use windows::core::w;
+use windows::core::{w, PCWSTR};
 use windows::Win32::{
     Foundation::*,
     Graphics::Gdi::*,
@@ -34,6 +34,8 @@ struct State {
     suppressed: bool,
     reveal_armed: bool,
     menu_open: bool,
+    // The window state the buttons' accessible names were last set for.
+    named: Option<bool>,
     // Where the pointer was when a window state change retired the caption.
     // Hover is ignored until it leaves, or the caption would return at once
     // under a pointer that has not moved.
@@ -138,6 +140,7 @@ pub fn install(window: &WebviewWindow) -> bool {
             suppressed: false,
             reveal_armed: false,
             menu_open: false,
+            named: None,
             reveal_block: None,
             page_left: None,
             dark: true,
@@ -241,6 +244,75 @@ unsafe fn enabled_buttons(owner: HWND) -> [bool; 3] {
     let style = GetWindowLongPtrW(owner, GWL_STYLE) as u32;
     let zoomed = IsZoomed(owner).as_bool();
     std::array::from_fn(|index| button_enabled(index, style, zoomed))
+}
+/// A system menu string as an accessible name: without its mnemonic marker
+/// (or the "(&N)" hint East Asian languages append) and accelerator text.
+fn menu_label(raw: &str) -> String {
+    let mut label = String::with_capacity(raw.len());
+    let mut chars = raw.split('\t').next().unwrap_or_default().chars();
+    while let Some(c) = chars.next() {
+        match c {
+            '&' => {
+                if chars.clone().next() == Some('&') {
+                    chars.next();
+                    label.push('&');
+                }
+            }
+            '(' => {
+                let mut ahead = chars.clone();
+                if ahead.next() == Some('&') && ahead.next().is_some() && ahead.next() == Some(')')
+                {
+                    chars = ahead;
+                } else {
+                    label.push(c);
+                }
+            }
+            _ => label.push(c),
+        }
+    }
+    label.trim().to_owned()
+}
+unsafe fn menu_name(menu: HMENU, command: u32) -> Option<String> {
+    let mut buffer = [0u16; 128];
+    let length = GetMenuStringW(menu, command, Some(&mut buffer), MF_BYCOMMAND);
+    let label = menu_label(&String::from_utf16_lossy(
+        buffer.get(..usize::try_from(length).ok()?)?,
+    ));
+    (!label.is_empty()).then_some(label)
+}
+/// The buttons are named from the system menu, which Windows has already
+/// localized, and Maximize becomes Restore with the window.
+unsafe fn name_buttons(p: *mut State, zoomed: bool) {
+    let menu = GetSystemMenu((*p).owner, false);
+    let names = [
+        (SC_MINIMIZE, "Minimize"),
+        if zoomed {
+            (SC_RESTORE, "Restore")
+        } else {
+            (SC_MAXIMIZE, "Maximize")
+        },
+        (SC_CLOSE, "Close"),
+    ];
+    for ((command, fallback), button) in names.into_iter().zip((*p).buttons) {
+        let name = if menu.is_invalid() {
+            None
+        } else {
+            menu_name(menu, command)
+        };
+        let name: Vec<u16> = name
+            .as_deref()
+            .unwrap_or(fallback)
+            .encode_utf16()
+            .chain(Some(0))
+            .collect();
+        let _ = SetWindowTextW(button, PCWSTR(name.as_ptr()));
+    }
+}
+/// The next enabled button in the direction of travel, wrapping around.
+fn next_enabled(enabled: [bool; 3], from: usize, forward: bool) -> Option<usize> {
+    (1..3)
+        .map(|step| (from + if forward { step } else { 3 - step }) % 3)
+        .find(|index| enabled[*index])
 }
 unsafe fn visible(hwnd: HWND, show: bool) {
     if (GetWindowLongPtrW(hwnd, GWL_STYLE) as u32 & WS_VISIBLE.0 != 0) != show {
@@ -381,6 +453,11 @@ unsafe fn layout(p: *mut State) {
                 SWP_NOZORDER | SWP_NOACTIVATE,
             );
         }
+    }
+    let zoomed = IsZoomed(owner).as_bool();
+    if (*p).named != Some(zoomed) {
+        (*p).named = Some(zoomed);
+        name_buttons(p, zoomed);
     }
     let controls_visible = show && displacement > 0 && render(p);
     visible((*p).strip, controls_visible);
@@ -1289,10 +1366,27 @@ unsafe extern "system" fn button_proc(
             SetTimer(Some((*p).strip), HIDE, 450, None);
             let _ = render(p);
         }
-        WM_KEYDOWN if w.0 == VK_SPACE.0 as usize => {
+        WM_KEYDOWN if w.0 == VK_SPACE.0 as usize || w.0 == VK_RETURN.0 as usize => {
             (*p).pressed_button = hwnd;
             (*p).hot_button = hwnd;
             let _ = render(p);
+        }
+        // A native button clicks on Space alone; Enter is ours to complete.
+        WM_KEYUP if w.0 == VK_RETURN.0 as usize => {
+            let armed = (*p).pressed_button == hwnd;
+            (*p).pressed_button = HWND::default();
+            let _ = render(p);
+            if let Some(index) = (*p).buttons.iter().position(|button| *button == hwnd) {
+                if armed {
+                    return SendMessageW(
+                        (*p).strip,
+                        WM_COMMAND,
+                        Some(WPARAM(index + 1)),
+                        Some(LPARAM(hwnd.0 as isize)),
+                    );
+                }
+            }
+            return LRESULT(0);
         }
         WM_KEYUP if w.0 == VK_SPACE.0 as usize => {
             (*p).pressed_button = HWND::default();
@@ -1303,10 +1397,20 @@ unsafe extern "system" fn button_proc(
             transition(p, false);
             return LRESULT(0);
         }
-        WM_KEYDOWN if w.0 == VK_LEFT.0 as usize || w.0 == VK_RIGHT.0 as usize => {
+        WM_KEYDOWN
+            if w.0 == VK_TAB.0 as usize
+                || w.0 == VK_LEFT.0 as usize
+                || w.0 == VK_RIGHT.0 as usize =>
+        {
+            let forward = if w.0 == VK_TAB.0 as usize {
+                GetKeyState(VK_SHIFT.0 as i32) >= 0
+            } else {
+                w.0 == VK_RIGHT.0 as usize
+            };
             let index = (*p).buttons.iter().position(|b| *b == hwnd).unwrap_or(0);
-            let next = (index + if w.0 == VK_LEFT.0 as usize { 2 } else { 1 }) % 3;
-            let _ = SetFocus(Some((*p).buttons[next]));
+            if let Some(next) = next_enabled(enabled_buttons((*p).owner), index, forward) {
+                let _ = SetFocus(Some((*p).buttons[next]));
+            }
             return LRESULT(0);
         }
         WM_NCDESTROY => {
@@ -1389,6 +1493,33 @@ mod tests {
         assert_eq!(button_hit(&rects, POINT { x: 940, y: 1 }), Some(1));
         assert_eq!(button_hit(&rects, POINT { x: 999, y: 29 }), None);
         assert_eq!(button_hit(&rects, POINT { x: 864, y: 0 }), None);
+    }
+    #[test]
+    fn system_menu_strings_become_plain_accessible_names() {
+        assert_eq!(menu_label("&Restore"), "Restore");
+        assert_eq!(menu_label("Mi&nimize"), "Minimize");
+        assert_eq!(menu_label("Close\tAlt+F4"), "Close");
+        assert_eq!(menu_label("&Close\tAlt+F4"), "Close");
+        assert_eq!(menu_label("R&&D"), "R&D");
+        assert_eq!(menu_label("最小化(&N)"), "最小化");
+        assert_eq!(menu_label("Minimiser (&N)"), "Minimiser");
+        assert_eq!(menu_label("(&"), "(");
+        assert_eq!(menu_label("Plain (text)"), "Plain (text)");
+        assert_eq!(menu_label(" \t"), "");
+    }
+    #[test]
+    fn keyboard_travel_skips_withdrawn_buttons_and_wraps() {
+        let all = [true; 3];
+        assert_eq!(next_enabled(all, 0, true), Some(1));
+        assert_eq!(next_enabled(all, 2, true), Some(0));
+        assert_eq!(next_enabled(all, 0, false), Some(2));
+        assert_eq!(next_enabled(all, 1, false), Some(0));
+        let no_maximize = [true, false, true];
+        assert_eq!(next_enabled(no_maximize, 0, true), Some(2));
+        assert_eq!(next_enabled(no_maximize, 2, false), Some(0));
+        let only_close = [false, false, true];
+        assert_eq!(next_enabled(only_close, 2, true), None);
+        assert_eq!(next_enabled(only_close, 2, false), None);
     }
     #[test]
     fn the_system_menu_offers_what_the_window_can_do() {
