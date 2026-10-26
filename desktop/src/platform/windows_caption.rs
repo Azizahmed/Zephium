@@ -660,7 +660,9 @@ unsafe fn pointer_input(
         }
         WM_MOUSELEAVE | WM_NCMOUSELEAVE => {
             cancel_reveal(p);
-            update_hot(p, HWND::default());
+            // Crossing into the neighbouring button ends this window's hover,
+            // not the pointer's.
+            update_hot(p, button_at_cursor(p));
             SetTimer(Some((*p).strip), HIDE, 450, None);
         }
         _ => {}
