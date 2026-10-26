@@ -10,17 +10,21 @@ pub enum Material {
     LiquidGlass,
     Acrylic,
     Mica,
+    /// The window wears the frost of the Zephium sky, drawn by the app.
+    Sky,
 }
 
 /// The person's choice of material. The system still decides what it can
 /// install: a choice it cannot honour falls back down the same ladder.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Preference {
+    /// The Zephium sky. A system material is a choice the person makes.
     #[default]
     Auto,
     LiquidGlass,
     Vibrancy,
     Acrylic,
+    Mica,
     None,
 }
 
@@ -30,9 +34,20 @@ impl Preference {
             "liquid_glass" => Self::LiquidGlass,
             "vibrancy" => Self::Vibrancy,
             "acrylic" => Self::Acrylic,
+            "mica" => Self::Mica,
             "none" => Self::None,
             _ => Self::Auto,
         }
+    }
+}
+
+/// The frost of the sky for one appearance, as the app bakes it.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub fn frost(light: bool) -> &'static [u8] {
+    if light {
+        include_bytes!("../../frame/src/shared/sky/assets/frost-day.png")
+    } else {
+        include_bytes!("../../frame/src/shared/sky/assets/frost-night.png")
     }
 }
 
@@ -143,6 +158,7 @@ fn tint_alpha(amount: u8) -> u8 {
     (f64::from(amount.min(100)) * 0.85 * 2.55).round() as u8
 }
 
+/// The sky is opaque, so it stands even where transparency is reduced.
 #[cfg(any(target_os = "macos", test))]
 fn select_material(
     reduce_transparency: bool,
@@ -150,7 +166,9 @@ fn select_material(
     glass: impl FnOnce() -> bool,
     vibrancy: impl FnOnce() -> bool,
 ) -> Material {
-    if reduce_transparency || preference == Preference::None {
+    if preference == Preference::Auto {
+        Material::Sky
+    } else if reduce_transparency || preference == Preference::None {
         Material::None
     } else if preference != Preference::Vibrancy && glass() {
         Material::LiquidGlass
@@ -166,10 +184,11 @@ mod macos {
     use super::{select_material, Material};
     use objc2::{rc::Retained, runtime::ProtocolObject, MainThreadMarker};
     use objc2_app_kit::{
-        NSAutoresizingMaskOptions, NSBox, NSBoxType, NSColor, NSView, NSWindow, NSWorkspace,
-        NSWorkspaceAccessibilityDisplayOptionsDidChangeNotification,
+        NSAutoresizingMaskOptions, NSBox, NSBoxType, NSColor, NSImage, NSView, NSWindow,
+        NSWindowOrderingMode, NSWorkspace, NSWorkspaceAccessibilityDisplayOptionsDidChangeNotification,
     };
-    use objc2_foundation::{NSNotificationCenter, NSObjectProtocol};
+    use objc2_foundation::{NSData, NSNotificationCenter, NSObjectProtocol};
+    use objc2_quartz_core::kCAGravityResizeAspectFill;
     use std::{
         cell::RefCell,
         collections::HashMap,
@@ -195,6 +214,50 @@ mod macos {
         }
     }
     thread_local! { static OBSERVERS: RefCell<HashMap<String, Observer>> = RefCell::new(HashMap::new()); }
+    thread_local! {
+        /// Each window's sky, so a reinstall replaces it rather than stacking.
+        static SKIES: RefCell<HashMap<String, Retained<NSView>>> = RefCell::new(HashMap::new());
+    }
+
+    fn clear_sky(window: &WebviewWindow) {
+        if let Some(view) = SKIES.with(|skies| skies.borrow_mut().remove(window.label())) {
+            view.removeFromSuperview();
+        }
+    }
+
+    /// Lays the sky's frost beneath everything the window holds. The picture
+    /// is a few kilobytes and the compositor stretches it, so the window's
+    /// glass costs one texture and no blur, and nothing redraws on resize.
+    fn install_sky(window: &WebviewWindow) -> bool {
+        clear_sky(window);
+        let (Some(main), Ok(pointer)) = (MainThreadMarker::new(), window.ns_view()) else {
+            return false;
+        };
+        // SAFETY: Tao's live content view, borrowed on the main thread.
+        let content = unsafe { &*(pointer as *const NSView) };
+        let data = NSData::with_bytes(super::frost(crate::appearance_is_light(window)));
+        let Some(image) = NSImage::initWithData(main.alloc(), &data) else {
+            return false;
+        };
+        let view = NSView::initWithFrame(main.alloc(), content.bounds());
+        view.setWantsLayer(true);
+        let Some(layer) = view.layer() else {
+            return false;
+        };
+        // SAFETY: a layer's contents may be an NSImage on macOS, and the
+        // gravity is an immutable framework constant.
+        unsafe {
+            layer.setContents(Some(&image));
+            layer.setContentsGravity(kCAGravityResizeAspectFill);
+        }
+        view.setAutoresizingMask(
+            NSAutoresizingMaskOptions::ViewWidthSizable
+                | NSAutoresizingMaskOptions::ViewHeightSizable,
+        );
+        content.addSubview_positioned_relativeTo(&view, NSWindowOrderingMode::Below, None);
+        SKIES.with(|skies| skies.borrow_mut().insert(window.label().to_owned(), view));
+        true
+    }
 
     /// Solid paints the window itself. The chrome covers only the sidebar, so
     /// with no material the gutters around the page showed the desktop. The
@@ -206,7 +269,7 @@ mod macos {
         };
         // SAFETY: Tao's live NSWindow, borrowed on the main thread for this call.
         let ns_window = unsafe { &*(pointer as *const NSWindow) };
-        let color = if material == Material::None {
+        let color = if matches!(material, Material::None | Material::Sky) {
             let [r, g, b] = super::ground(crate::appearance_is_light(window));
             srgb((r, g, b, 255))
         } else {
@@ -278,6 +341,7 @@ mod macos {
             // Clear before reapplying: the upstream glass API inserts a new view.
             let _ = clear_liquid_glass(window);
             let _ = clear_vibrancy(window);
+            clear_sky(window);
             // The system's materials as it draws them, untinted unless the
             // person asked for the theme's ground over them.
             let tint = super::tint(crate::appearance_is_light(window));
@@ -304,6 +368,11 @@ mod macos {
                     applied
                 },
             )
+        };
+        let material = if material == Material::Sky && !install_sky(window) {
+            Material::None
+        } else {
+            material
         };
         if !panel {
             set_ground(window, material);
@@ -410,11 +479,25 @@ mod tests {
     }
 
     #[test]
+    fn the_sky_is_the_default_and_stands_where_transparency_is_reduced() {
+        for reduce in [false, true] {
+            assert_eq!(
+                select_material(
+                    reduce,
+                    Preference::Auto,
+                    || panic!("glass is not chosen"),
+                    || panic!("vibrancy is not chosen")
+                ),
+                Material::Sky
+            );
+        }
+    }
+    #[test]
     fn accessibility_avoids_effect_installation() {
         assert_eq!(
             select_material(
                 true,
-                Preference::Auto,
+                Preference::LiquidGlass,
                 || panic!("glass must not run"),
                 || panic!("vibrancy must not run")
             ),
@@ -426,18 +509,18 @@ mod tests {
         assert_eq!(
             select_material(
                 false,
-                Preference::Auto,
+                Preference::LiquidGlass,
                 || true,
                 || panic!("fallback must not run")
             ),
             Material::LiquidGlass
         );
         assert_eq!(
-            select_material(false, Preference::Auto, || false, || true),
+            select_material(false, Preference::LiquidGlass, || false, || true),
             Material::Vibrancy
         );
         assert_eq!(
-            select_material(false, Preference::Auto, || false, || false),
+            select_material(false, Preference::LiquidGlass, || false, || false),
             Material::None
         );
     }

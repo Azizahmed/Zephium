@@ -1744,7 +1744,9 @@ export type LoginItemStatus = {
 	needs_approval: boolean,
 };
 
-export type Material = "none" | "vibrancy" | "liquid_glass" | "acrylic" | "mica";
+export type Material = "none" | "vibrancy" | "liquid_glass" | "acrylic" | "mica" |
+/**  The window wears the frost of the Zephium sky, drawn by the app. */
+"sky";
 
 /**  Outcome of admitting one public image for a subject on the canvas. */
 export type MediaAdmitV1 =

@@ -181,11 +181,11 @@ pub fn value_allowed(key: &str, value: &str) -> bool {
             value,
             "graphite" | "sky" | "sage" | "rose" | "amber" | "teal" | "lavender" | "orchid"
         ),
-        // What the window is made of. `auto` takes the best the system offers;
-        // a material the system cannot install falls back on its own.
+        // What the window is made of. `auto` is the Zephium sky; a system
+        // material the system cannot install falls back on its own.
         "ui.material" => matches!(
             value,
-            "auto" | "liquid_glass" | "vibrancy" | "acrylic" | "none"
+            "auto" | "liquid_glass" | "vibrancy" | "acrylic" | "mica" | "none"
         ),
         "ui.newtab-clock-format" => matches!(value, "system" | "12h" | "24h"),
         "ui.tab-layout" => matches!(value, "vertical" | "horizontal"),
@@ -395,7 +395,8 @@ mod tests {
         assert!(value_allowed("ui.accent", "orchid"));
         assert!(!value_allowed("ui.accent", "purple"));
         assert!(value_allowed("ui.material", "vibrancy"));
-        assert!(!value_allowed("ui.material", "mica"));
+        assert!(value_allowed("ui.material", "mica"));
+        assert!(!value_allowed("ui.material", "sky"));
         assert!(value_allowed("ui.newtab-clock-format", "24h"));
         assert!(value_allowed("ui.newtab-tasks", "false"));
         assert!(value_allowed("ui.language", "en"));

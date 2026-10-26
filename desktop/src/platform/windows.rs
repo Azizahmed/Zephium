@@ -502,10 +502,12 @@ fn set_dark_frame(window: &WebviewWindow, dark: bool) {
     };
 }
 
-/// The browser window wears Mica Alt, the backdrop Windows 11 made for tabbed
-/// main windows: it takes the wallpaper's hue without its detail and stays
-/// put while the window is inactive. Acrylic is a flyout's material, so only
-/// the launcher keeps it, and Windows 10, which has no Mica, falls back to it.
+/// The browser window wears the Zephium sky, which the frame paints, unless
+/// the person chose a system material. Then it is Mica Alt, the backdrop
+/// Windows 11 made for tabbed main windows: it takes the wallpaper's hue
+/// without its detail and stays put while the window is inactive. Acrylic is
+/// a flyout's material, so only the launcher keeps it, and Windows 10, which
+/// has no Mica, falls back to it.
 pub fn apply_material(window: &WebviewWindow, dark: bool) -> bool {
     use crate::material::Material;
     let launcher = window.label() == crate::overlay::PANEL_LABEL;
@@ -519,11 +521,14 @@ pub fn apply_material(window: &WebviewWindow, dark: bool) -> bool {
     set_dark_frame(window, dark);
     // Use the fallible native adapter directly; the Tauri effect dispatcher
     // discards the underlying DWM error and can falsely report acrylic.
-    let contrast = menus::high_contrast()
-        || crate::material::preference() == crate::material::Preference::None;
+    let preference = crate::material::preference();
+    let contrast = menus::high_contrast() || preference == crate::material::Preference::None;
     let result = if contrast {
         let _ = window_vibrancy::clear_tabbed(window);
         window_vibrancy::clear_acrylic(window).map(|()| Material::None)
+    } else if !launcher && preference == crate::material::Preference::Auto {
+        let _ = window_vibrancy::clear_tabbed(window);
+        window_vibrancy::clear_acrylic(window).map(|()| Material::Sky)
     } else if launcher {
         window_vibrancy::apply_acrylic(window, Some(tint)).map(|()| Material::Acrylic)
     } else {
