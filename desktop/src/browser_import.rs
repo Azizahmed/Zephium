@@ -412,10 +412,7 @@ async fn read(
     tauri::async_runtime::spawn_blocking(move || {
         let locations = Locations::from_env().ok_or(ImportError::Missing)?;
         // Discovery again: only a profile this source lists right now is read.
-        let source = zephium_import::discover(&locations)
-            .into_iter()
-            .find(|source| source.browser == browser)
-            .ok_or(ImportError::Missing)?;
+        let source = zephium_import::source(&locations, browser).ok_or(ImportError::Missing)?;
         let listed = source
             .profiles
             .iter()

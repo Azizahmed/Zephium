@@ -284,7 +284,8 @@ pub fn discover(locations: &Locations) -> Vec<Source> {
         .collect()
 }
 
-fn source(locations: &Locations, browser: Browser) -> Option<Source> {
+/// One browser's source, if it is on this device with something to import.
+pub fn source(locations: &Locations, browser: Browser) -> Option<Source> {
     let profiles = match browser {
         Browser::Safari => return safari::source(locations),
         Browser::Arc => arc::profiles(locations),
