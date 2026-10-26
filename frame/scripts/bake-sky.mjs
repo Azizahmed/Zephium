@@ -1,6 +1,8 @@
 // Bakes the new tab's skies: each source picture, doubled, dissolving through
 // a halftone screen into the page below its horizon. The dots are drawn here
-// once, so a new tab only shows a picture and draws nothing of its own. Run
+// once, so a new tab only shows a picture and draws nothing of its own. Each
+// sky also gets its frost: the same picture as seen through the window's
+// glass, small enough that stretching it over the window is the blur. Run
 // with `node scripts/bake-sky.mjs` after changing a source in assets/sky
 // (needs ffmpeg with libsvtav1).
 import { execFileSync } from "node:child_process";
@@ -13,6 +15,8 @@ const source = (name) =>
   fileURLToPath(new URL(`../../assets/sky/${name}-source.png`, import.meta.url));
 const out = (name) =>
   fileURLToPath(new URL(`../src/shared/sky/assets/sky-${name}.avif`, import.meta.url));
+const frostOut = (name) =>
+  fileURLToPath(new URL(`../src/shared/sky/assets/frost-${name}.png`, import.meta.url));
 
 /** The sources' size; the baked picture is twice it, for a display's pixels. */
 const WIDTH = 1672;
@@ -22,17 +26,116 @@ const SCALE = 2;
 const CELL = 7;
 const BAND = { top: 486, bottom: 889 };
 
+/** The frost's width. Stretched to a window it is a blur of about 1/40 of
+ *  the window's width, with no blur drawn at run time. */
+const FROST_WIDTH = 192;
+/** Glass flattens what is behind it: each frost pixel moves this far toward
+ *  the picture's mean colour, so a bright cloud cannot sit under a label. */
+const FROST_FLATTEN = 0.5;
+
 /** Each sky with the page it dissolves into, and which of its clouds hold the
  *  edge longest: by day the blue between them, by night their moonlit tops.
- *  The page colours are the new tab's `--sky-paper`. */
+ *  The page colours are the new tab's `--sky-paper`. Its frost is laid under
+ *  `veil`, which keeps the interface's ink legible on it. */
 const SCENES = [
-  { name: "day", paper: [247, 247, 248], follow: -1.8 },
-  { name: "night", paper: [26, 29, 37], follow: 1.1 },
+  { name: "day", paper: [247, 247, 248], follow: -1.8, veil: [255, 255, 255, 0.25] },
+  { name: "night", paper: [26, 29, 37], follow: 1.1, veil: [5, 8, 20, 0.3] },
 ];
+
+/** A separable Gaussian over an RGB float image, clamped at its edges. */
+function blur(pixels, width, height, sigma) {
+  const reach = Math.ceil(sigma * 3);
+  const kernel = Array.from({ length: reach * 2 + 1 }, (_, i) =>
+    Math.exp(-((i - reach) ** 2) / (2 * sigma * sigma)),
+  );
+  const total = kernel.reduce((a, b) => a + b, 0);
+  const pass = (source, horizontal) => {
+    const target = new Float32Array(source.length);
+    for (let y = 0; y < height; y++)
+      for (let x = 0; x < width; x++)
+        for (let channel = 0; channel < 3; channel++) {
+          let sum = 0;
+          for (let k = -reach; k <= reach; k++) {
+            const sx = horizontal ? Math.min(width - 1, Math.max(0, x + k)) : x;
+            const sy = horizontal ? y : Math.min(height - 1, Math.max(0, y + k));
+            sum += source[(sy * width + sx) * 3 + channel] * kernel[k + reach];
+          }
+          target[(y * width + x) * 3 + channel] = sum / total;
+        }
+    return target;
+  };
+  return pass(pass(pixels, true), false);
+}
+
+function frost(name, raw, width, height, veil) {
+  const small = Math.round((FROST_WIDTH * height) / width);
+  const shrunk = execFileSync(
+    "ffmpeg",
+    [
+      "-v",
+      "error",
+      "-f",
+      "rawvideo",
+      "-pix_fmt",
+      "rgb24",
+      "-s",
+      `${width}x${height}`,
+      "-i",
+      raw,
+      "-vf",
+      `scale=${FROST_WIDTH}:${small}:flags=area`,
+      "-f",
+      "rawvideo",
+      "-pix_fmt",
+      "rgb24",
+      "-",
+    ],
+    { maxBuffer: FROST_WIDTH * small * 3 + 1024 },
+  );
+  const soft = blur(Float32Array.from(shrunk), FROST_WIDTH, small, 3.5);
+  const mean = [0, 1, 2].map((channel) => {
+    let sum = 0;
+    for (let at = channel; at < soft.length; at += 3) sum += soft[at];
+    return sum / (soft.length / 3);
+  });
+  const [vr, vg, vb, va] = veil;
+  const frosted = Buffer.alloc(soft.length);
+  for (let at = 0; at < soft.length; at++) {
+    const channel = at % 3;
+    const flat = soft[at] + (mean[channel] - soft[at]) * FROST_FLATTEN;
+    frosted[at] = Math.round(flat + ([vr, vg, vb][channel] - flat) * va);
+  }
+  const file = `${raw}.frost`;
+  writeFileSync(file, frosted);
+  execFileSync(
+    "ffmpeg",
+    [
+      "-v",
+      "error",
+      "-y",
+      "-f",
+      "rawvideo",
+      "-pix_fmt",
+      "rgb24",
+      "-s",
+      `${FROST_WIDTH}x${small}`,
+      "-i",
+      file,
+      "-frames:v",
+      "1",
+      "-c:v",
+      "png",
+      "-pred",
+      "mixed",
+      frostOut(name),
+    ],
+    { stdio: ["ignore", "ignore", "inherit"] },
+  );
+}
 
 const smooth = (t) => t * t * (3 - 2 * t);
 
-function bake({ name, paper, follow }) {
+function bake({ name, paper, follow, veil }) {
   const width = WIDTH * SCALE;
   const height = HEIGHT * SCALE;
   const cell = CELL * SCALE;
@@ -162,6 +265,7 @@ function bake({ name, paper, follow }) {
     ],
     { stdio: ["ignore", "ignore", "inherit"] },
   );
+  frost(name, raw, width, height, veil);
   rmSync(scratch, { recursive: true });
 }
 
