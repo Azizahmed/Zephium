@@ -5,58 +5,41 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
-use crate::{snapshot, ImportError, ImportNode, ImportedVisit, Locations, Profile};
+use crate::{snapshot, Browser, ImportError, ImportNode, ImportedVisit, Locations, Os, Profile};
 
-/// Browsers that keep Firefox's profile tree.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Family {
-    Firefox,
-    Zen,
-}
-
-fn roots(locations: &Locations, family: Family) -> Vec<PathBuf> {
-    let candidates = match family {
-        Family::Firefox if cfg!(target_os = "macos") => vec![locations
-            .home
-            .join("Library")
-            .join("Application Support")
-            .join("Firefox")],
-        Family::Firefox if cfg!(windows) => locations
+fn roots(locations: &Locations, browser: Browser) -> Vec<PathBuf> {
+    let home = &locations.home;
+    let candidates = match (browser, locations.os) {
+        (Browser::Firefox, Os::Mac) => vec![locations.support().join("Firefox")],
+        (Browser::Firefox, Os::Windows) => locations
             .app_data
             .iter()
             .map(|app_data| app_data.join("Mozilla").join("Firefox"))
             .collect(),
-        Family::Firefox => vec![
-            locations.home.join(".mozilla").join("firefox"),
+        (Browser::Firefox, Os::Linux) => vec![
+            home.join(".mozilla").join("firefox"),
             // The Snap package keeps its own copy of the profile tree.
-            locations
-                .home
-                .join("snap")
+            home.join("snap")
                 .join("firefox")
                 .join("common")
                 .join(".mozilla")
                 .join("firefox"),
         ],
-        Family::Zen if cfg!(target_os = "macos") => vec![locations
-            .home
-            .join("Library")
-            .join("Application Support")
-            .join("zen")],
-        Family::Zen if cfg!(windows) => locations
+        (Browser::Zen, Os::Mac) => vec![locations.support().join("zen")],
+        (Browser::Zen, Os::Windows) => locations
             .app_data
             .iter()
             .map(|app_data| app_data.join("zen"))
             .collect(),
-        Family::Zen => vec![
-            locations.home.join(".zen"),
+        (Browser::Zen, Os::Linux) => vec![
+            home.join(".zen"),
             // The Flatpak keeps its tree inside the app's own home.
-            locations
-                .home
-                .join(".var")
+            home.join(".var")
                 .join("app")
                 .join("app.zen_browser.zen")
                 .join(".zen"),
         ],
+        _ => return Vec::new(),
     };
     candidates
         .into_iter()
@@ -117,8 +100,8 @@ fn listed(root: &Path) -> Vec<Listed> {
         .collect()
 }
 
-pub(crate) fn profiles(locations: &Locations, family: Family) -> Vec<Profile> {
-    let mut profiles: Vec<(bool, Profile)> = roots(locations, family)
+pub(crate) fn profiles(locations: &Locations, browser: Browser) -> Vec<Profile> {
+    let mut profiles: Vec<(bool, Profile)> = roots(locations, browser)
         .iter()
         .flat_map(|root| listed(root))
         .filter(|listed| listed.dir.join("places.sqlite").is_file())
@@ -126,7 +109,7 @@ pub(crate) fn profiles(locations: &Locations, family: Family) -> Vec<Profile> {
             (
                 listed.default,
                 Profile {
-                    essentials: family == Family::Zen && crate::zen::has_session(&listed.dir),
+                    essentials: browser == Browser::Zen && crate::zen::has_session(&listed.dir),
                     id: listed.path,
                     name: listed.name,
                     bookmarks: true,
@@ -146,10 +129,10 @@ pub(crate) fn profiles(locations: &Locations, family: Family) -> Vec<Profile> {
 
 pub(crate) fn profile_dir(
     locations: &Locations,
-    family: Family,
+    browser: Browser,
     profile: &str,
 ) -> Result<PathBuf, ImportError> {
-    roots(locations, family)
+    roots(locations, browser)
         .iter()
         .flat_map(|root| listed(root))
         .find(|listed| listed.path == profile)
@@ -340,37 +323,34 @@ mod tests {
 
     #[test]
     fn profiles_ini_names_profiles_and_the_installed_default_comes_first() {
-        let home = tempfile::tempdir().unwrap();
-        let root = if cfg!(target_os = "macos") {
-            home.path().join("Library/Application Support/Firefox")
-        } else if cfg!(windows) {
-            home.path().join("Roaming/Mozilla/Firefox")
-        } else {
-            home.path().join(".mozilla/firefox")
-        };
-        for profile in ["Profiles/old.default", "Profiles/new.default-release"] {
-            std::fs::create_dir_all(root.join(profile)).unwrap();
-            places(&root.join(profile));
+        for (os, tree) in [
+            (Os::Mac, "Library/Application Support/Firefox"),
+            (Os::Windows, "Roaming/Mozilla/Firefox"),
+            (Os::Linux, ".mozilla/firefox"),
+        ] {
+            let home = tempfile::tempdir().unwrap();
+            let root = home.path().join(tree);
+            for profile in ["Profiles/old.default", "Profiles/new.default-release"] {
+                std::fs::create_dir_all(root.join(profile)).unwrap();
+                places(&root.join(profile));
+            }
+            std::fs::write(
+                root.join("profiles.ini"),
+                "[Profile1]\nName=default\nIsRelative=1\nPath=Profiles/old.default\n\n\
+                 [Profile0]\nName=default-release\nIsRelative=1\nPath=Profiles/new.default-release\n\n\
+                 [Install4F96D1932A9F858E]\nDefault=Profiles/new.default-release\n",
+            )
+            .unwrap();
+            let locations = Locations::scratch(os, home.path());
+            let found = profiles(&locations, Browser::Firefox);
+            assert_eq!(
+                found.iter().map(|p| p.id.as_str()).collect::<Vec<_>>(),
+                vec!["Profiles/new.default-release", "Profiles/old.default"],
+                "{os:?}"
+            );
+            assert!(profile_dir(&locations, Browser::Firefox, "Profiles/old.default").is_ok());
+            assert!(profile_dir(&locations, Browser::Firefox, "../../etc").is_err());
+            assert!(profiles(&locations, Browser::Zen).is_empty());
         }
-        std::fs::write(
-            root.join("profiles.ini"),
-            "[Profile1]\nName=default\nIsRelative=1\nPath=Profiles/old.default\n\n\
-             [Profile0]\nName=default-release\nIsRelative=1\nPath=Profiles/new.default-release\n\n\
-             [Install4F96D1932A9F858E]\nDefault=Profiles/new.default-release\n",
-        )
-        .unwrap();
-        let locations = Locations {
-            home: home.path().to_owned(),
-            local_app_data: None,
-            app_data: Some(home.path().join("Roaming")),
-        };
-        let found = profiles(&locations, Family::Firefox);
-        assert_eq!(
-            found.iter().map(|p| p.id.as_str()).collect::<Vec<_>>(),
-            vec!["Profiles/new.default-release", "Profiles/old.default"]
-        );
-        assert!(profile_dir(&locations, Family::Firefox, "Profiles/old.default").is_ok());
-        assert!(profile_dir(&locations, Family::Firefox, "../../etc").is_err());
-        assert!(profiles(&locations, Family::Zen).is_empty());
     }
 }

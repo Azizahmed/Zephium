@@ -8,34 +8,21 @@ use std::path::PathBuf;
 
 use serde_json::Value;
 
-use crate::{child, Essential, ImportError, ImportNode, Locations, Profile};
+use crate::{child, Essential, ImportError, ImportNode, Locations, Os, Profile};
 
 const PROFILE: &str = "Default";
 
 fn root(locations: &Locations) -> Option<PathBuf> {
-    if cfg!(target_os = "macos") {
-        let root = locations
-            .home
-            .join("Library")
-            .join("Application Support")
-            .join("Arc");
-        return root.is_dir().then_some(root);
+    match locations.os {
+        Os::Mac => Some(locations.support().join("Arc")).filter(|root| root.is_dir()),
+        // Arc for Windows is a Store package.
+        Os::Windows => locations
+            .store_packages("TheBrowserCompany.Arc")
+            .into_iter()
+            .map(|package| package.join("LocalCache").join("Local").join("Arc"))
+            .find(|root| root.is_dir()),
+        Os::Linux => None,
     }
-    if cfg!(windows) {
-        let packages = locations.local_app_data.as_ref()?.join("Packages");
-        return std::fs::read_dir(packages)
-            .ok()?
-            .filter_map(Result::ok)
-            .filter(|entry| {
-                entry
-                    .file_name()
-                    .to_string_lossy()
-                    .starts_with("TheBrowserCompany.Arc")
-            })
-            .map(|entry| entry.path().join("LocalCache").join("Local").join("Arc"))
-            .find(|root| root.is_dir());
-    }
-    None
 }
 
 pub(crate) fn profiles(locations: &Locations) -> Vec<Profile> {
