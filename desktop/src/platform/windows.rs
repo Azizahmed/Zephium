@@ -483,8 +483,32 @@ pub fn round_corners(window: &WebviewWindow) {
     };
 }
 
-// The system supplies blur; a restrained tint keeps the window translucent.
+/// System backdrops take their light or dark rendition from the frame, not
+/// from the app, so a dark interface over a light-framed Mica reads grey.
+fn set_dark_frame(window: &WebviewWindow, dark: bool) {
+    use windows::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_USE_IMMERSIVE_DARK_MODE};
+    let Ok(hwnd) = window.hwnd() else {
+        return;
+    };
+    let value = i32::from(dark);
+    // SAFETY: a plain write of a live window's DWM attribute.
+    let _ = unsafe {
+        DwmSetWindowAttribute(
+            windows::Win32::Foundation::HWND(hwnd.0),
+            DWMWA_USE_IMMERSIVE_DARK_MODE,
+            &value as *const _ as *const _,
+            std::mem::size_of_val(&value) as u32,
+        )
+    };
+}
+
+/// The browser window wears Mica Alt, the backdrop Windows 11 made for tabbed
+/// main windows: it takes the wallpaper's hue without its detail and stays
+/// put while the window is inactive. Acrylic is a flyout's material, so only
+/// the launcher keeps it, and Windows 10, which has no Mica, falls back to it.
 pub fn apply_material(window: &WebviewWindow, dark: bool) -> bool {
+    use crate::material::Material;
+    let launcher = window.label() == crate::overlay::PANEL_LABEL;
     // Win10 draws this tint; 22H2 and later ignore it and the frame's wash
     // carries the theme instead.
     let tint = match crate::material::themed_ground(!dark) {
@@ -492,23 +516,30 @@ pub fn apply_material(window: &WebviewWindow, dark: bool) -> bool {
         None if dark => (24, 24, 28, 96),
         None => (245, 245, 249, 96),
     };
+    set_dark_frame(window, dark);
     // Use the fallible native adapter directly; the Tauri effect dispatcher
     // discards the underlying DWM error and can falsely report acrylic.
     let contrast = menus::high_contrast()
         || crate::material::preference() == crate::material::Preference::None;
     let result = if contrast {
-        window_vibrancy::clear_acrylic(window)
+        let _ = window_vibrancy::clear_tabbed(window);
+        window_vibrancy::clear_acrylic(window).map(|()| Material::None)
+    } else if launcher {
+        window_vibrancy::apply_acrylic(window, Some(tint)).map(|()| Material::Acrylic)
     } else {
-        window_vibrancy::apply_acrylic(window, Some(tint))
+        // Each backdrop replaces the other, but a Win10 fallback leaves the
+        // accent policy set, which would composite under Mica.
+        let _ = window_vibrancy::clear_acrylic(window);
+        window_vibrancy::apply_tabbed(window, Some(dark))
+            .map(|()| Material::Mica)
+            .or_else(|_| {
+                window_vibrancy::apply_acrylic(window, Some(tint)).map(|()| Material::Acrylic)
+            })
     };
     if let Err(e) = &result {
         crate::write_diagnostic(format_args!("material: window effects unavailable: {e}"));
     }
-    let material = if result.is_ok() && !contrast {
-        crate::material::Material::Acrylic
-    } else {
-        crate::material::Material::None
-    };
+    let material = result.as_ref().copied().unwrap_or(Material::None);
     let first = MATERIALS
         .lock()
         .unwrap_or_else(|e| e.into_inner())
