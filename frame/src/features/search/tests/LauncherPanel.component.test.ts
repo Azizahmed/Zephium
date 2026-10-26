@@ -642,3 +642,24 @@ test("a list moving under a resting pointer does not move the selection", async 
   move(rows[2]!, 415, 233);
   await vi.waitFor(() => expect(rows[2]!.getAttribute("aria-selected")).toBe("true"));
 });
+
+test("the sheet stops where a short display lets the window stop", async () => {
+  const available = vi.spyOn(window.screen, "availHeight", "get").mockReturnValue(400);
+  try {
+    document.documentElement.dataset.material = "liquid_glass";
+    await page.viewport(760, 700);
+    const screen = await render(LauncherPanel, { props: { context, destinations } });
+    await screen.getByRole("combobox").fill("rust");
+    await reply(
+      "rust",
+      Array.from({ length: 20 }, (_, i) => visit("Result " + i, "https://example.com/" + i)),
+    );
+    // The display's 400 less a margin of 24 above and below.
+    await vi.waitFor(() => expect(native.layout.mock.calls.at(-1)![0].height).toBe(352));
+    const layout = native.layout.mock.calls.at(-1)![0];
+    // Room is left under the sheet for the glass's shadow.
+    expect((layout.sheet!.y ?? 0) + (layout.sheet!.height ?? 0)).toBeLessThanOrEqual(352 - 40);
+  } finally {
+    available.mockRestore();
+  }
+});

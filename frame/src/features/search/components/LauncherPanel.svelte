@@ -61,8 +61,10 @@
    *  their shadow, so the margin is whatever it left. */
   const WIDTH = 680;
   const FOOTER = 52;
-  /** Mirrors the native ceiling on the launcher window. */
+  /** Mirrors the native ceiling on the launcher window: this, or the work
+   *  area less a margin above and below on a display too short for it. */
   const WINDOW_MAX = 600;
+  const WINDOW_MARGIN = 24;
 
   let input = $state<HTMLInputElement>();
   let list = $state<HTMLElement>();
@@ -70,6 +72,9 @@
   let contentHeight = $state(0);
   let windowWidth = $state(0);
   let windowHeight = $state(0);
+  /** The display's usable height. The window is placed before it moves there,
+   *  so this is re-read whenever the window is resized or presented. */
+  let workHeight = $state(screen.availHeight);
   let menu = $state(false);
   let menuHeight = $state(0);
   let menuItem = $state<string>();
@@ -87,8 +92,9 @@
   let inset = $derived(detached ? Math.max(0, (windowWidth - WIDTH) / 2) : 0);
   let gap = $derived(detached ? GAP : 0);
   let nativeClip = $derived(IS_WINDOWS && !detached);
+  let ceiling = $derived(Math.max(1, Math.min(WINDOW_MAX, workHeight - 2 * WINDOW_MARGIN)));
   let sheetMax = $derived(
-    Math.max(0, (nativeClip ? windowHeight : WINDOW_MAX) - 2 * inset - FIELD - gap),
+    Math.max(0, (nativeClip ? windowHeight : ceiling) - 2 * inset - FIELD - gap),
   );
   let sheetHeight = $derived(
     Math.min(sheetMax, Math.max(contentHeight + FOOTER, menu ? menuHeight + FOOTER + 8 : 0)),
@@ -176,6 +182,7 @@
         if (bound === next.session_id) return;
         bound = next.session_id;
         menu = false;
+        workHeight = screen.availHeight;
         entering = !IS_WINDOWS;
         clearTimeout(arrival);
         if (entering) arrival = setTimeout(() => (entering = false), ARRIVAL_MS);
@@ -337,6 +344,7 @@
 <svelte:window
   bind:innerWidth={windowWidth}
   bind:innerHeight={windowHeight}
+  onresize={() => (workHeight = screen.availHeight)}
   onkeydown={keydown}
   onkeyup={(event) => (commandHeld = IS_MAC ? event.metaKey : event.ctrlKey)}
 />
