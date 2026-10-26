@@ -49,12 +49,15 @@ pub enum Browser {
     OperaGx,
     Comet,
     Chromium,
+    Floorp,
+    LibreWolf,
+    Waterfox,
 }
 
 impl Browser {
     /// In the order they are offered: where this audience most often comes
     /// from first.
-    pub const ALL: [Browser; 14] = [
+    pub const ALL: [Browser; 17] = [
         Browser::Arc,
         Browser::Zen,
         Browser::Chrome,
@@ -69,6 +72,9 @@ impl Browser {
         Browser::OperaGx,
         Browser::Comet,
         Browser::Chromium,
+        Browser::Floorp,
+        Browser::LibreWolf,
+        Browser::Waterfox,
     ];
 
     pub fn id(self) -> &'static str {
@@ -87,6 +93,9 @@ impl Browser {
             Browser::OperaGx => "opera-gx",
             Browser::Comet => "comet",
             Browser::Chromium => "chromium",
+            Browser::Floorp => "floorp",
+            Browser::LibreWolf => "librewolf",
+            Browser::Waterfox => "waterfox",
         }
     }
 
@@ -110,12 +119,22 @@ impl Browser {
             Browser::OperaGx => "Opera GX",
             Browser::Comet => "Comet",
             Browser::Chromium => "Chromium",
+            Browser::Floorp => "Floorp",
+            Browser::LibreWolf => "LibreWolf",
+            Browser::Waterfox => "Waterfox",
         }
     }
 
     /// Keeps Firefox's profile tree: `profiles.ini` and `places.sqlite`.
     fn is_firefox_family(self) -> bool {
-        matches!(self, Browser::Firefox | Browser::Zen)
+        matches!(
+            self,
+            Browser::Firefox
+                | Browser::Zen
+                | Browser::Floorp
+                | Browser::LibreWolf
+                | Browser::Waterfox
+        )
     }
 }
 
