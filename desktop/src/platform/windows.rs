@@ -174,7 +174,8 @@ pub fn harden_privileged(
     let scheduled = window.with_webview(move |webview| unsafe {
         use webview2_com::Microsoft::Web::WebView2::Win32::{
             ICoreWebView2Environment10, ICoreWebView2Environment7, ICoreWebView2Settings3,
-            ICoreWebView2Settings4, ICoreWebView2_10, ICoreWebView2_13, ICoreWebView2_18,
+            ICoreWebView2Settings4, ICoreWebView2Settings5, ICoreWebView2_10, ICoreWebView2_13,
+            ICoreWebView2_18,
             ICoreWebView2_25, ICoreWebView2_5, COREWEBVIEW2_PERMISSION_STATE_DENY,
         };
         use webview2_com::{
@@ -297,6 +298,14 @@ pub fn harden_privileged(
                     "privileged WebView2 password/autofill surfaces remained enabled",
                 )
                 .into());
+            }
+            // The launcher is a fixed-size surface whose window clips to its
+            // measured height. Ctrl+wheel or a pinch would scale the page
+            // inside that clip and cut its footer off.
+            if label == crate::overlay::PANEL_LABEL {
+                settings.SetIsZoomControlEnabled(false)?;
+                require::<ICoreWebView2Settings5>(&settings, "Settings5")?
+                    .SetIsPinchZoomEnabled(false)?;
             }
 
             let mut token = 0_i64;
