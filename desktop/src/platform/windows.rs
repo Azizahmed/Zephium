@@ -502,12 +502,11 @@ fn set_dark_frame(window: &WebviewWindow, dark: bool) {
     };
 }
 
-/// The browser window wears the Zephium sky, which the frame paints, unless
-/// the person chose a system material. Then it is Mica Alt, the backdrop
-/// Windows 11 made for tabbed main windows: it takes the wallpaper's hue
-/// without its detail and stays put while the window is inactive. Acrylic is
-/// a flyout's material, so only the launcher keeps it, and Windows 10, which
-/// has no Mica, falls back to it.
+/// The browser window wears Mica Alt, the backdrop Windows 11 made for tabbed
+/// main windows: it takes the wallpaper's hue without its detail and stays
+/// put while the window is inactive. The frame lays the Zephium sky over it
+/// on a new tab. Acrylic is a flyout's material, so only the launcher keeps
+/// it, and Windows 10, which has no Mica, falls back to it.
 pub fn apply_material(window: &WebviewWindow, dark: bool) -> bool {
     use crate::material::Material;
     let launcher = window.label() == crate::overlay::PANEL_LABEL;
@@ -526,9 +525,6 @@ pub fn apply_material(window: &WebviewWindow, dark: bool) -> bool {
     let result = if contrast {
         let _ = window_vibrancy::clear_tabbed(window);
         window_vibrancy::clear_acrylic(window).map(|()| Material::None)
-    } else if !launcher && preference == crate::material::Preference::Auto {
-        let _ = window_vibrancy::clear_tabbed(window);
-        window_vibrancy::clear_acrylic(window).map(|()| Material::Sky)
     } else if launcher {
         window_vibrancy::apply_acrylic(window, Some(tint)).map(|()| Material::Acrylic)
     } else {

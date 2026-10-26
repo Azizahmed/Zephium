@@ -46,20 +46,37 @@
   --wash-launcher: 82%;
 }
 
-/* The sky: the window wears the frost of the new tab's sky, a picture small
-   enough that stretching it is the blur. Native lays it under a Mac window;
-   on Windows the chrome is the whole window and lays it itself. */
-:root[data-material="sky"] {
-  --wash-raised: 56%;
-  --wash-launcher: 56%;
+/* The Zephium sky. On a new tab the window wears the frost of its sky, a
+   picture small enough that stretching it is the blur, and it gives way to
+   the system's glass behind anything else. A Mac lays it natively; on
+   Windows the chrome is the whole window and lays it over the Mica. */
+.shell[data-caption] {
+  isolation: isolate;
 }
 
-:root[data-material="sky"] .shell[data-caption] {
+.shell[data-caption]::before {
+  position: absolute;
+  z-index: -1;
+  inset: 0;
   background: url("../../shared/sky/assets/frost-night.png") center / cover;
+  content: "";
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--motion-page) var(--ease-emphasized);
 }
 
-:root[data-material="sky"][data-theme="light"] .shell[data-caption] {
+:root[data-theme="light"] .shell[data-caption]::before {
   background-image: url("../../shared/sky/assets/frost-day.png");
+}
+
+:root[data-sky] .shell[data-caption]::before {
+  opacity: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .shell[data-caption]::before {
+    transition: none;
+  }
 }
 
 /* Mica is near-opaque and already dark-framed, so the wash only lays the

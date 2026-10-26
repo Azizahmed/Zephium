@@ -138,7 +138,7 @@ async function initialize(generation: number) {
     const id = e.payload;
     if (id.startsWith("material.")) {
       const material = id.slice("material.".length);
-      if (["none", "vibrancy", "liquid_glass", "acrylic", "mica", "sky"].includes(material)) {
+      if (["none", "vibrancy", "liquid_glass", "acrylic", "mica"].includes(material)) {
         commandMaterial = material;
         document.documentElement.setAttribute("data-material", material);
       }

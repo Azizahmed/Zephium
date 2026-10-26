@@ -10,15 +10,13 @@ pub enum Material {
     LiquidGlass,
     Acrylic,
     Mica,
-    /// The window wears the frost of the Zephium sky, drawn by the app.
-    Sky,
 }
 
 /// The person's choice of material. The system still decides what it can
 /// install: a choice it cannot honour falls back down the same ladder.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Preference {
-    /// The Zephium sky. A system material is a choice the person makes.
+    /// The system's best glass, with the Zephium sky over it on a new tab.
     #[default]
     Auto,
     LiquidGlass,
@@ -158,7 +156,6 @@ fn tint_alpha(amount: u8) -> u8 {
     (f64::from(amount.min(100)) * 0.85 * 2.55).round() as u8
 }
 
-/// The sky is opaque, so it stands even where transparency is reduced.
 #[cfg(any(target_os = "macos", test))]
 fn select_material(
     reduce_transparency: bool,
@@ -166,9 +163,7 @@ fn select_material(
     glass: impl FnOnce() -> bool,
     vibrancy: impl FnOnce() -> bool,
 ) -> Material {
-    if preference == Preference::Auto {
-        Material::Sky
-    } else if reduce_transparency || preference == Preference::None {
+    if reduce_transparency || preference == Preference::None {
         Material::None
     } else if preference != Preference::Vibrancy && glass() {
         Material::LiquidGlass
@@ -185,10 +180,11 @@ mod macos {
     use objc2::{rc::Retained, runtime::ProtocolObject, MainThreadMarker};
     use objc2_app_kit::{
         NSAutoresizingMaskOptions, NSBox, NSBoxType, NSColor, NSImage, NSView, NSWindow,
-        NSWindowOrderingMode, NSWorkspace, NSWorkspaceAccessibilityDisplayOptionsDidChangeNotification,
+        NSWindowOrderingMode, NSWorkspace,
+        NSWorkspaceAccessibilityDisplayOptionsDidChangeNotification,
     };
     use objc2_foundation::{NSData, NSNotificationCenter, NSObjectProtocol};
-    use objc2_quartz_core::kCAGravityResizeAspectFill;
+    use objc2_quartz_core::{kCAGravityResizeAspectFill, CAMediaTimingFunction, CATransaction};
     use std::{
         cell::RefCell,
         collections::HashMap,
@@ -217,6 +213,8 @@ mod macos {
     thread_local! {
         /// Each window's sky, so a reinstall replaces it rather than stacking.
         static SKIES: RefCell<HashMap<String, Retained<NSView>>> = RefCell::new(HashMap::new());
+        /// Whether each window shows its sky, kept across reinstalls.
+        static SKY_SHOWN: RefCell<HashMap<String, bool>> = RefCell::new(HashMap::new());
     }
 
     fn clear_sky(window: &WebviewWindow) {
@@ -225,9 +223,10 @@ mod macos {
         }
     }
 
-    /// Lays the sky's frost beneath everything the window holds. The picture
-    /// is a few kilobytes and the compositor stretches it, so the window's
-    /// glass costs one texture and no blur, and nothing redraws on resize.
+    /// Lays the sky's frost over the window's glass and beneath everything
+    /// the window holds, shown while the window shows a new tab. The picture
+    /// is a few kilobytes the compositor stretches, so the frost costs one
+    /// texture and no blur, and nothing redraws on resize.
     fn install_sky(window: &WebviewWindow) -> bool {
         clear_sky(window);
         let (Some(main), Ok(pointer)) = (MainThreadMarker::new(), window.ns_view()) else {
@@ -250,11 +249,27 @@ mod macos {
             layer.setContents(Some(&image));
             layer.setContentsGravity(kCAGravityResizeAspectFill);
         }
+        let shown = SKY_SHOWN.with(|shown| shown.borrow().get(window.label()).copied());
+        layer.setOpacity(if shown == Some(true) { 1.0 } else { 0.0 });
         view.setAutoresizingMask(
             NSAutoresizingMaskOptions::ViewWidthSizable
                 | NSAutoresizingMaskOptions::ViewHeightSizable,
         );
-        content.addSubview_positioned_relativeTo(&view, NSWindowOrderingMode::Below, None);
+        // Above the glass, which is installed lowest, and beneath the chrome
+        // and the stage over it; before the chrome exists, on top, where the
+        // views added after it will cover it.
+        let chrome = content
+            .subviews()
+            .iter()
+            .find(|view| view.downcast_ref::<objc2_web_kit::WKWebView>().is_some());
+        match chrome {
+            Some(chrome) => content.addSubview_positioned_relativeTo(
+                &view,
+                NSWindowOrderingMode::Below,
+                Some(&chrome),
+            ),
+            None => content.addSubview(&view),
+        }
         SKIES.with(|skies| skies.borrow_mut().insert(window.label().to_owned(), view));
         true
     }
@@ -269,7 +284,7 @@ mod macos {
         };
         // SAFETY: Tao's live NSWindow, borrowed on the main thread for this call.
         let ns_window = unsafe { &*(pointer as *const NSWindow) };
-        let color = if matches!(material, Material::None | Material::Sky) {
+        let color = if material == Material::None {
             let [r, g, b] = super::ground(crate::appearance_is_light(window));
             srgb((r, g, b, 255))
         } else {
@@ -311,6 +326,41 @@ mod macos {
         );
         effect.addSubview(&wash);
     }
+
+    /// Fades the sky in over the glass for a new tab, or out to the glass
+    /// for anything else. Only the layer's opacity moves; the first answer
+    /// for a window is applied without motion.
+    pub fn show_sky(window: &WebviewWindow, shown: bool) {
+        let first = SKY_SHOWN.with(|states| {
+            states
+                .borrow_mut()
+                .insert(window.label().to_owned(), shown)
+                .is_none()
+        });
+        let Some(layer) = SKIES
+            .with(|skies| skies.borrow().get(window.label()).cloned())
+            .and_then(|view| view.layer())
+        else {
+            return;
+        };
+        let to = if shown { 1.0 } else { 0.0 };
+        let still =
+            first || NSWorkspace::sharedWorkspace().accessibilityDisplayShouldReduceMotion();
+        CATransaction::begin();
+        if still {
+            CATransaction::setDisableActions(true);
+        } else {
+            CATransaction::setAnimationDuration(SKY_SECONDS);
+            CATransaction::setAnimationTimingFunction(Some(
+                &CAMediaTimingFunction::functionWithControlPoints(0.16, 1.0, 0.3, 1.0),
+            ));
+        }
+        layer.setOpacity(to);
+        CATransaction::commit();
+    }
+
+    /// The chrome's --motion-page, so the sky leaves as the page arrives.
+    const SKY_SECONDS: f64 = 0.4;
 
     pub fn current(label: &str) -> Material {
         INSTALLED
@@ -369,11 +419,9 @@ mod macos {
                 },
             )
         };
-        let material = if material == Material::Sky && !install_sky(window) {
-            Material::None
-        } else {
-            material
-        };
+        if !panel && preference == super::Preference::Auto {
+            install_sky(window);
+        }
         if !panel {
             set_ground(window, material);
         }
@@ -455,7 +503,7 @@ mod macos {
     }
 }
 #[cfg(target_os = "macos")]
-pub use macos::{current, install};
+pub use macos::{current, install, show_sky};
 
 #[cfg(test)]
 mod tests {
@@ -479,25 +527,11 @@ mod tests {
     }
 
     #[test]
-    fn the_sky_is_the_default_and_stands_where_transparency_is_reduced() {
-        for reduce in [false, true] {
-            assert_eq!(
-                select_material(
-                    reduce,
-                    Preference::Auto,
-                    || panic!("glass is not chosen"),
-                    || panic!("vibrancy is not chosen")
-                ),
-                Material::Sky
-            );
-        }
-    }
-    #[test]
     fn accessibility_avoids_effect_installation() {
         assert_eq!(
             select_material(
                 true,
-                Preference::LiquidGlass,
+                Preference::Auto,
                 || panic!("glass must not run"),
                 || panic!("vibrancy must not run")
             ),
@@ -509,18 +543,18 @@ mod tests {
         assert_eq!(
             select_material(
                 false,
-                Preference::LiquidGlass,
+                Preference::Auto,
                 || true,
                 || panic!("fallback must not run")
             ),
             Material::LiquidGlass
         );
         assert_eq!(
-            select_material(false, Preference::LiquidGlass, || false, || true),
+            select_material(false, Preference::Auto, || false, || true),
             Material::Vibrancy
         );
         assert_eq!(
-            select_material(false, Preference::LiquidGlass, || false, || false),
+            select_material(false, Preference::Auto, || false, || false),
             Material::None
         );
     }
