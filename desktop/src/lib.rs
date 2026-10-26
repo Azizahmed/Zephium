@@ -2081,9 +2081,7 @@ pub(crate) fn emit_media_changed(app: &tauri::AppHandle, profile: &str, id: &str
         id: id.to_owned(),
         revision: revision.to_owned(),
     };
-    for label in [MAIN_LABEL, overlay::PANEL_LABEL] {
-        emit_to_privileged(app, label, "zephium:resource-changed", &event);
-    }
+    emit_to_privileged(app, MAIN_LABEL, "zephium:resource-changed", &event);
 }
 
 fn emit_to_privileged<T: Serialize>(app: &tauri::AppHandle, label: &str, event: &str, payload: &T) {
@@ -6735,9 +6733,7 @@ pub fn run() {
             let downloads_app = handle.clone();
             if !engine.initialize_downloads(store.clone(), move |profile| {
                 let event = DownloadsChanged { profile: profile.to_string() };
-                for label in [MAIN_LABEL, overlay::PANEL_LABEL] {
-                    emit_to_privileged(&downloads_app, label, "zephium:downloads-changed", &event);
-                }
+                emit_to_privileged(&downloads_app, MAIN_LABEL, "zephium:downloads-changed", &event);
             }) { return Err(std::io::Error::other("download service initialization was not admitted").into()); }
             let startup_engine = app.try_state::<StartupEngine>().ok_or_else(|| {
                 std::io::Error::other("startup engine cleanup owner is unavailable")
