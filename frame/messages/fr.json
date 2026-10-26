@@ -1482,7 +1482,7 @@
   "onb_import_action": "Importer",
   "onb_import_unavailable": "L'importation arrive bientôt, dans une mise à jour.",
   "onb_import_quit": "Quittez d'abord {browser}. Il garde ses données verrouillées tant qu'il est ouvert.",
-  "onb_import_permission": "{browser} a d'abord besoin d'un accès dans Réglages Système.",
+  "onb_import_permission": "Zephium a besoin de l'accès complet au disque pour lire {browser}. Activez-le dans Réglages Système, puis rouvrez Zephium.",
   "onb_import_reading": "Lecture de {count} éléments",
   "onb_import_done": "{count} éléments importés",
   "onb_import_none": "Aucun autre navigateur trouvé sur cet appareil.",

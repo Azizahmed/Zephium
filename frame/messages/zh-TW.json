@@ -1482,7 +1482,7 @@
   "onb_import_action": "匯入",
   "onb_import_unavailable": "匯入功能即將在更新中推出。",
   "onb_import_quit": "請先結束 {browser}。它開啟時會鎖定其資料。",
-  "onb_import_permission": "{browser} 需要先在系統設定中取得存取權限。",
+  "onb_import_permission": "Zephium 需要「完整磁碟取用權限」才能讀取 {browser}。請在系統設定中開啟，然後重新打開 Zephium。",
   "onb_import_reading": "正在讀取 {count} 項",
   "onb_import_done": "已匯入 {count} 項",
   "onb_import_none": "這台裝置上找不到其他瀏覽器。",
