@@ -560,6 +560,17 @@
     translate: 0 0;
   }
 
+  /* Out over the page, the card draws its own edge: a hairline inside its
+     corners, so it reads clearly against a page as light as it is. */
+  .browser-sidebar[data-hidden]::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    box-shadow: inset 0 0 0 1px var(--sidebar-card-edge);
+    pointer-events: none;
+  }
+
   @media (prefers-reduced-motion: reduce) {
     .browser-sidebar[data-hidden][data-armed] {
       transition: none;

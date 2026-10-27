@@ -393,6 +393,9 @@
   --shadow-overlay: 0 12px 36px rgb(0 0 0 / 0.3), 0 0 0 0.5px rgb(255 255 255 / 0.08);
   --shadow-popover: var(--shadow-float);
 
+  /* The hidden sidebar's card's own edge, out over the page. */
+  --sidebar-card-edge: rgb(255 255 255 / 0.14);
+
   /* A rim and one wide soft drop, and nothing else. Stacked or tight shadows
      read as weight pressing down rather than as height, which is what makes a
      floating panel look pasted on. The rim is what actually separates the
@@ -770,6 +773,7 @@
   --shadow-raised: 0 1px 2px rgb(24 24 27 / 0.08), 0 0 0 0.5px rgb(24 24 27 / 0.06);
   --shadow-float: 0 6px 22px rgb(24 24 27 / 0.16), 0 0 0 0.5px rgb(24 24 27 / 0.1);
   --shadow-overlay: 0 12px 36px rgb(24 24 27 / 0.14), 0 0 0 0.5px rgb(24 24 27 / 0.1);
+  --sidebar-card-edge: rgb(24 24 27 / 0.12);
   --shadow-popover: var(--shadow-float);
   --shadow-menu: 0 0 0 1px rgb(24 24 27 / 0.09), 0 14px 44px -10px rgb(24 24 27 / 0.16);
   --shine: inset 0 1px 0 0 rgb(255 255 255 / 0.3);
