@@ -9,10 +9,9 @@ use objc2::rc::{Retained, Weak};
 use objc2::runtime::{AnyObject, ProtocolObject};
 use objc2::{define_class, msg_send, AnyThread, DefinedClass, MainThreadOnly, Message};
 use objc2_app_kit::{
-    NSAppearanceCustomization, NSColor, NSCursor, NSEvent, NSEventMask, NSTrackingArea,
-    NSTrackingAreaOptions, NSView, NSWindow, NSWindowDidResignKeyNotification,
-    NSWindowDidResizeNotification, NSWindowOrderingMode, NSWindowWillCloseNotification,
-    NSWorkspace,
+    NSColor, NSCursor, NSEvent, NSEventMask, NSTrackingArea, NSTrackingAreaOptions, NSView,
+    NSWindow, NSWindowDidResignKeyNotification, NSWindowDidResizeNotification,
+    NSWindowOrderingMode, NSWindowWillCloseNotification, NSWorkspace,
 };
 use objc2_foundation::{
     ns_string, MainThreadMarker, NSNotification, NSNotificationCenter, NSNumber, NSObjectProtocol,
@@ -38,6 +37,8 @@ const HOT_WIDTH: f64 = 8.0;
 /// edge is this far in from the chrome's own.
 const GUTTER: f64 = 8.0;
 const HOT_INSET: f64 = 2.0;
+/// The guide's width, a split guide's.
+const GUIDE_WIDTH: f64 = 4.0;
 const SNAP: f64 = 140.0;
 const MIN_EXPANDED: f64 = 180.0;
 
@@ -282,12 +283,14 @@ impl Control {
         } else {
             28.0_f64.min(frame.size.height)
         };
+        // Centred in the gap between the column and the page, as a split's
+        // guide is centred in the strip between its panes.
         let target = NSRect::new(
             NSPoint::new(
-                frame.origin.x + GUTTER + width - 2.0,
+                frame.origin.x + GUTTER + width + GUTTER / 2.0 - GUIDE_WIDTH / 2.0,
                 frame.origin.y + (frame.size.height - height) / 2.0,
             ),
-            NSSize::new(2.0, height),
+            NSSize::new(GUIDE_WIDTH, height),
         );
         let existing = self
             .ivars()
@@ -325,18 +328,19 @@ impl Control {
         CATransaction::setDisableActions(true);
         view.setFrame(target);
         if let Some(layer) = view.layer() {
-            let paint = block2::RcBlock::new(|| {
-                let color = if dragging {
-                    NSColor::labelColor()
-                } else {
-                    NSColor::secondaryLabelColor()
-                };
-                layer.setBackgroundColor(Some(&color.CGColor()));
-            });
-            self.effectiveAppearance()
-                .performAsCurrentDrawingAppearance(&paint);
-            layer.setCornerRadius(1.0);
-            layer.setOpacity(if dragging { 0.9 } else { 0.65 });
+            // A neutral grey with a fine dark edge and a soft shadow, as a
+            // split's guide is: it reads on a white page and a black one,
+            // which the label colour alone never did.
+            let tone = if dragging { 0.78 } else { 0.7 };
+            layer.setBackgroundColor(Some(&NSColor::colorWithWhite_alpha(tone, 1.0).CGColor()));
+            layer.setBorderColor(Some(&NSColor::colorWithWhite_alpha(0.0, 0.22).CGColor()));
+            layer.setBorderWidth(0.5);
+            layer.setShadowColor(Some(&NSColor::blackColor().CGColor()));
+            layer.setShadowOpacity(0.3);
+            layer.setShadowRadius(2.0);
+            layer.setShadowOffset(NSSize::new(0.0, 0.0));
+            layer.setCornerRadius(2.0);
+            layer.setOpacity(if dragging { 1.0 } else { 0.85 });
         }
         CATransaction::commit();
         if !self.guide_current(&view, generation) {
