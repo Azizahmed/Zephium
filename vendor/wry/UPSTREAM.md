@@ -272,9 +272,10 @@ unchanged, so the application and standalone fork locks retain their versions.
 
 The required standalone formatter exposed pre-existing WebKit whitespace drift;
 only those formatter changes are normalized. The existing eight-argument
-`attach_handlers` registration boundary carries a narrow lint expectation with
-its retained-owner rationale. Its signature/behavior is unchanged and workspace
-and standalone Clippy retain `-D warnings`.
+`attach_handlers` registration boundary carries a scoped, Rust 1.77-compatible
+lint allowance with its retained-owner rationale in a comment. It does not use
+`#[expect]` or lint-reason syntax, which require Rust 1.81. Its signature/behavior
+is unchanged and workspace and standalone Clippy retain `-D warnings`.
 
 ### Native class bundle identity compatibility (2026-10-27)
 

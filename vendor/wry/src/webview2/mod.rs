@@ -1790,10 +1790,8 @@ impl InnerWebView {
   }
 
   #[inline]
-  #[expect(
-    clippy::too_many_arguments,
-    reason = "native registration keeps distinct controller, navigation and cleanup owners"
-  )]
+  // Native registration keeps distinct controller, navigation and cleanup owners.
+  #[allow(clippy::too_many_arguments)]
   unsafe fn attach_handlers(
     hwnd: HWND,
     controller: &ICoreWebView2Controller,
