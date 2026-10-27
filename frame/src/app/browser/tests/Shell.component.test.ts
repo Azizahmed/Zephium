@@ -15,7 +15,6 @@ vi.mock("$shared/ipc/bindings", async () => {
   return mockBindings({
     pagePermissionCardHost: async () => {},
     tabsBootstrap: async () => {},
-    windowSky: async () => {},
     sidebarSetHidden: async () => {},
   });
 });

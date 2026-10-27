@@ -39,7 +39,6 @@ vi.mock("$shared/ipc/bindings", async () => {
     tabsUnsplit: vi.fn(),
     sidebarSetHidden: async () => {},
     sidebarPeek: async () => {},
-    windowSky: async () => {},
     sidebarSetWidth: vi.fn(),
     tabDragOver: vi.fn(),
     tabDrop: vi.fn(),

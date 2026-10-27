@@ -16,7 +16,6 @@ vi.mock("$shared/ipc/bindings", async () => {
     pageFind: native.find,
     sidebarSetHidden: async () => {},
     sidebarPeek: async () => {},
-    windowSky: async () => {},
     sidebarSetWidth: async () => {},
   });
 });

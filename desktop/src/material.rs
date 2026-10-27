@@ -39,16 +39,6 @@ impl Preference {
     }
 }
 
-/// The frost of the sky for one appearance, as the app bakes it.
-#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
-pub fn frost(light: bool) -> &'static [u8] {
-    if light {
-        include_bytes!("../../frame/src/shared/sky/assets/frost-day.png")
-    } else {
-        include_bytes!("../../frame/src/shared/sky/assets/frost-night.png")
-    }
-}
-
 static CHOSEN: std::sync::Mutex<Option<Preference>> = std::sync::Mutex::new(None);
 
 /// A change arrives as a projection, possibly ahead of the store's write.
@@ -179,12 +169,10 @@ mod macos {
     use super::{select_material, Material};
     use objc2::{rc::Retained, runtime::ProtocolObject, MainThreadMarker};
     use objc2_app_kit::{
-        NSAutoresizingMaskOptions, NSBox, NSBoxType, NSColor, NSImage, NSView, NSWindow,
-        NSWindowOrderingMode, NSWorkspace,
+        NSAutoresizingMaskOptions, NSBox, NSBoxType, NSColor, NSView, NSWindow, NSWorkspace,
         NSWorkspaceAccessibilityDisplayOptionsDidChangeNotification,
     };
-    use objc2_foundation::{NSData, NSNotificationCenter, NSObjectProtocol};
-    use objc2_quartz_core::{kCAGravityResizeAspectFill, CAMediaTimingFunction, CATransaction};
+    use objc2_foundation::{NSNotificationCenter, NSObjectProtocol};
     use std::{
         cell::RefCell,
         collections::HashMap,
@@ -210,70 +198,6 @@ mod macos {
         }
     }
     thread_local! { static OBSERVERS: RefCell<HashMap<String, Observer>> = RefCell::new(HashMap::new()); }
-    thread_local! {
-        /// Each window's sky, so a reinstall replaces it rather than stacking.
-        static SKIES: RefCell<HashMap<String, Retained<NSView>>> = RefCell::new(HashMap::new());
-        /// Whether each window shows its sky, kept across reinstalls.
-        static SKY_SHOWN: RefCell<HashMap<String, bool>> = RefCell::new(HashMap::new());
-    }
-
-    fn clear_sky(window: &WebviewWindow) {
-        if let Some(view) = SKIES.with(|skies| skies.borrow_mut().remove(window.label())) {
-            view.removeFromSuperview();
-        }
-    }
-
-    /// Lays the sky's frost over the window's glass and beneath everything
-    /// the window holds, shown while the window shows a new tab. The picture
-    /// is a few kilobytes the compositor stretches, so the frost costs one
-    /// texture and no blur, and nothing redraws on resize.
-    fn install_sky(window: &WebviewWindow) -> bool {
-        clear_sky(window);
-        let (Some(main), Ok(pointer)) = (MainThreadMarker::new(), window.ns_view()) else {
-            return false;
-        };
-        // SAFETY: Tao's live content view, borrowed on the main thread.
-        let content = unsafe { &*(pointer as *const NSView) };
-        let data = NSData::with_bytes(super::frost(crate::appearance_is_light(window)));
-        let Some(image) = NSImage::initWithData(main.alloc(), &data) else {
-            return false;
-        };
-        let view = NSView::initWithFrame(main.alloc(), content.bounds());
-        view.setWantsLayer(true);
-        let Some(layer) = view.layer() else {
-            return false;
-        };
-        // SAFETY: a layer's contents may be an NSImage on macOS, and the
-        // gravity is an immutable framework constant.
-        unsafe {
-            layer.setContents(Some(&image));
-            layer.setContentsGravity(kCAGravityResizeAspectFill);
-        }
-        let shown = SKY_SHOWN.with(|shown| shown.borrow().get(window.label()).copied());
-        layer.setOpacity(if shown == Some(true) { 1.0 } else { 0.0 });
-        view.setAutoresizingMask(
-            NSAutoresizingMaskOptions::ViewWidthSizable
-                | NSAutoresizingMaskOptions::ViewHeightSizable,
-        );
-        // Above the glass, which is installed lowest, and beneath the chrome
-        // and the stage over it; before the chrome exists, on top, where the
-        // views added after it will cover it.
-        let chrome = content
-            .subviews()
-            .iter()
-            .find(|view| view.downcast_ref::<objc2_web_kit::WKWebView>().is_some());
-        match chrome {
-            Some(chrome) => content.addSubview_positioned_relativeTo(
-                &view,
-                NSWindowOrderingMode::Below,
-                Some(&chrome),
-            ),
-            None => content.addSubview(&view),
-        }
-        SKIES.with(|skies| skies.borrow_mut().insert(window.label().to_owned(), view));
-        true
-    }
-
     /// Solid paints the window itself. The chrome covers only the sidebar, so
     /// with no material the gutters around the page showed the desktop. The
     /// colour is the theme's chrome rung, so the sidebar and its surround are
@@ -327,41 +251,6 @@ mod macos {
         effect.addSubview(&wash);
     }
 
-    /// Fades the sky in over the glass for a new tab, or out to the glass
-    /// for anything else. Only the layer's opacity moves; the first answer
-    /// for a window is applied without motion.
-    pub fn show_sky(window: &WebviewWindow, shown: bool) {
-        let first = SKY_SHOWN.with(|states| {
-            states
-                .borrow_mut()
-                .insert(window.label().to_owned(), shown)
-                .is_none()
-        });
-        let Some(layer) = SKIES
-            .with(|skies| skies.borrow().get(window.label()).cloned())
-            .and_then(|view| view.layer())
-        else {
-            return;
-        };
-        let to = if shown { 1.0 } else { 0.0 };
-        let still =
-            first || NSWorkspace::sharedWorkspace().accessibilityDisplayShouldReduceMotion();
-        CATransaction::begin();
-        if still {
-            CATransaction::setDisableActions(true);
-        } else {
-            CATransaction::setAnimationDuration(SKY_SECONDS);
-            CATransaction::setAnimationTimingFunction(Some(
-                &CAMediaTimingFunction::functionWithControlPoints(0.16, 1.0, 0.3, 1.0),
-            ));
-        }
-        layer.setOpacity(to);
-        CATransaction::commit();
-    }
-
-    /// The chrome's --motion-page, so the sky leaves as the page arrives.
-    const SKY_SECONDS: f64 = 0.4;
-
     pub fn current(label: &str) -> Material {
         INSTALLED
             .lock()
@@ -391,7 +280,6 @@ mod macos {
             // Clear before reapplying: the upstream glass API inserts a new view.
             let _ = clear_liquid_glass(window);
             let _ = clear_vibrancy(window);
-            clear_sky(window);
             // The system's materials as it draws them, untinted unless the
             // person asked for the theme's ground over them.
             let tint = super::tint(crate::appearance_is_light(window));
@@ -419,9 +307,6 @@ mod macos {
                 },
             )
         };
-        if !panel && preference == super::Preference::Auto {
-            install_sky(window);
-        }
         if !panel {
             set_ground(window, material);
         }
@@ -503,7 +388,7 @@ mod macos {
     }
 }
 #[cfg(target_os = "macos")]
-pub use macos::{current, install, show_sky};
+pub use macos::{current, install};
 
 #[cfg(test)]
 mod tests {

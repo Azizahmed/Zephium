@@ -529,11 +529,6 @@ export const commands = {
 	 *  moment it starts to go rather than once it has.
 	 */
 	sidebarPeek: (peek: boolean, lights: boolean) => __TAURI_INVOKE<void>("sidebar_peek", { peek, lights }),
-	/**
-	 *  Shows the Zephium sky over the window's glass for a new tab, or fades it
-	 *  to the glass for anything else.
-	 */
-	windowSky: (shown: boolean) => __TAURI_INVOKE<void>("window_sky", { shown }),
 	sidebarResize: (width: number | null, enabled: boolean, revision: number | null) => __TAURI_INVOKE<boolean>("sidebar_resize", { width, enabled, revision }),
 	sidebarResizeGuide: (width: number | null) => __TAURI_INVOKE<boolean>("sidebar_resize_guide", { width }),
 	tabDragOver: (x: number | null, y: number | null) => __TAURI_INVOKE<void>("tab_drag_over", { x, y }),

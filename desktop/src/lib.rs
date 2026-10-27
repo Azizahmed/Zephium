@@ -1827,7 +1827,6 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             sidebar_set_width,
             sidebar_set_hidden,
             sidebar_peek,
-            window_sky,
             sidebar_resize,
             sidebar_resize_guide,
             tab_drag_over,
@@ -5371,23 +5370,6 @@ fn sidebar_peek(caller: WebviewWindow, shell: State<'_, Handle>, peek: bool, lig
     #[cfg(not(target_os = "macos"))]
     let _ = lights;
     shell.dispatch(Command::PeekSidebar(peek));
-}
-
-/// Shows the Zephium sky over the window's glass for a new tab, or fades it
-/// to the glass for anything else.
-#[tauri::command]
-#[specta::specta]
-fn window_sky(caller: WebviewWindow, shown: bool) {
-    if !authorize(&caller, CallerPolicy::Main, "window_sky") {
-        return;
-    }
-    #[cfg(target_os = "macos")]
-    {
-        let window = caller.clone();
-        let _ = caller.run_on_main_thread(move || material::show_sky(&window, shown));
-    }
-    #[cfg(not(target_os = "macos"))]
-    let _ = shown;
 }
 
 #[tauri::command]

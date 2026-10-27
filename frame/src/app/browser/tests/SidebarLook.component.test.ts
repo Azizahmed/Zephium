@@ -9,7 +9,6 @@ vi.mock("$shared/ipc/bindings", async () => {
     runCommand: vi.fn(async () => ({ accepted: true, operation_id: null })),
     sidebarSetHidden: async () => {},
     sidebarPeek: async () => {},
-    windowSky: async () => {},
     sidebarSetWidth: vi.fn(async () => undefined),
     sidebarResize: async () => false,
     sidebarResizeGuide: async () => true,
