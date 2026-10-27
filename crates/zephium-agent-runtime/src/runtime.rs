@@ -2457,21 +2457,6 @@ mod tests {
         }
     }
 
-    struct NeverController;
-
-    impl AgentRuntimeController for NeverController {
-        fn run(
-            self: Box<Self>,
-            worker: AgentRuntimeWorker,
-            browser: AgentRuntimeBrowser,
-        ) -> AgentRuntimeControllerFuture {
-            Box::pin(async move {
-                let _retained_outside_capability_loop = (worker, browser);
-                std::future::pending::<()>().await;
-            })
-        }
-    }
-
     struct FaultIgnoringController {
         started: mpsc::Sender<()>,
     }
@@ -3868,9 +3853,13 @@ mod tests {
     #[test]
     fn lifecycle_shutdown_forcibly_drops_noncooperative_controller() {
         let _guard = runtime_test_guard();
+        let worker_exit_gate = HeldWorkerExitGate::enable();
+        let (started_sender, started_receiver) = mpsc::channel();
         let pending = spawn_suspended_with_controller(
             AgentRuntimeConfig::STANDARD,
-            Box::new(NeverController),
+            Box::new(FaultIgnoringController {
+                started: started_sender,
+            }),
         )
         .expect("controller worker starts");
         let sink = pending.native_event_sink();
@@ -3886,9 +3875,17 @@ mod tests {
         let weak_port = Arc::downgrade(&port);
         let composition = pending.bind_browser_port(port as Arc<dyn AgentBrowserPort>);
         let (handle, completion, lifecycle) = composition.into_parts();
-        let outcome = lifecycle.shutdown_until(Instant::now() + Duration::from_secs(1));
+        started_receiver
+            .recv_timeout(Duration::from_secs(1))
+            .expect("controller has started outside the event loop");
+        let outcome = lifecycle.shutdown_until(Instant::now());
         assert!(matches!(outcome, AgentBrowserShutdownOutcome::Unclean));
-        assert!(completion.is_stopped());
+        assert!(!completion.is_stopped());
+        worker_exit_gate.release();
+        assert!(completion
+            .inner
+            .completion
+            .wait_until(Instant::now() + Duration::from_secs(1)));
         assert!(handle.status().sealed());
         assert_eq!(
             handle.status().mailbox_fault(),
