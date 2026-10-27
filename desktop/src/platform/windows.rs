@@ -4,6 +4,8 @@ mod caption;
 mod menus;
 #[path = "windows_renderer.rs"]
 pub(crate) mod renderer;
+#[path = "windows_sidebar_edge.rs"]
+mod sidebar_edge;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -630,6 +632,30 @@ pub fn set_chrome_hidden(window: &WebviewWindow, hidden: bool) -> bool {
     dispatched && applied.load(Ordering::Acquire)
 }
 
+thread_local! {
+    /// The windows whose sidebar is hidden. The caption's reveal begins where
+    /// the sidebar's card ends, not where the chrome behind the page does.
+    static HIDDEN_SIDEBARS: std::cell::RefCell<std::collections::HashSet<String>> =
+        std::cell::RefCell::new(std::collections::HashSet::new());
+}
+
+/// The sidebar is hidden or back: the pointer is read for its left edge
+/// while it is away.
+pub fn sidebar_hidden(window: &WebviewWindow, hidden: bool) {
+    let owner = window.clone();
+    let _ = window.run_on_main_thread(move || {
+        HIDDEN_SIDEBARS.with(|windows| {
+            let mut windows = windows.borrow_mut();
+            if hidden {
+                windows.insert(owner.label().to_owned());
+            } else {
+                windows.remove(owner.label());
+            }
+        });
+        sidebar_edge::watch(&owner, hidden);
+    });
+}
+
 pub fn make_chrome(window: &WebviewWindow, _dispatch: MainThreadDispatch) -> SharedChrome {
     Arc::new(ChromeAdapter {
         window: window.clone(),
@@ -646,7 +672,13 @@ struct ChromeAdapter {
 impl Chrome for ChromeAdapter {
     fn position(&self, frame: ChromeFrame) -> bool {
         let window = self.window.clone();
-        let page_left = (!frame.fill_width).then_some(frame.rect.x + frame.rect.width);
+        let hidden = HIDDEN_SIDEBARS.with(|windows| windows.borrow().contains(self.window.label()));
+        let edge = if hidden {
+            zephium_core::layout::hidden_card_edge(frame.rect.width)
+        } else {
+            frame.rect.width
+        };
+        let page_left = (!frame.fill_width).then_some(frame.rect.x + edge);
         self.window
             .run_on_main_thread(move || caption::set_page_left(&window, page_left))
             .is_ok()

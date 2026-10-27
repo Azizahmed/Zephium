@@ -75,6 +75,8 @@ mod data_export;
 mod default_browser;
 mod diagnostic_report;
 mod diagnostics;
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+mod edge_reach;
 mod external_links;
 #[cfg(feature = "work-product")]
 mod favicon_probe;
@@ -5350,7 +5352,7 @@ fn sidebar_set_hidden(caller: WebviewWindow, shell: State<'_, Handle>, hidden: b
     if !authorize(&caller, CallerPolicy::Main, "sidebar_set_hidden") {
         return;
     }
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     platform::imp::sidebar_hidden(&caller, hidden);
     shell.dispatch(Command::SetSidebarHidden(hidden));
 }
