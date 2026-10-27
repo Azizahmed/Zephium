@@ -19,6 +19,7 @@
     toggleMode,
   } from "$session/sidebar-mode.svelte";
   import { commands } from "$shared/ipc/bindings";
+  import { newTabImage } from "$session/newtab-background.svelte";
   import { FROSTS, scene } from "$shared/sky";
   import { uiCommands as ui } from "$domain/ui-commands";
   import SidebarHeader from "./SidebarHeader.svelte";
@@ -451,7 +452,10 @@
   style:left={leaving ? `${leaving.left}px` : undefined}
   style:top={leaving ? `${leaving.top}px` : undefined}
   style:height={leaving ? `${leaving.height}px` : undefined}
-  style:--sidebar-frost={away || handing ? `url("${FROSTS[scene()]}")` : undefined}
+  style:--sidebar-frost={(away || handing) && !newTabImage()
+    ? `url("${FROSTS[scene()]}")`
+    : undefined}
+  data-custom-background={newTabImage() !== null || undefined}
   data-handing={handing ?? undefined}
   data-covering={covering || undefined}
   data-tauri-drag-region="deep"
@@ -546,6 +550,14 @@
     background: var(--sidebar-frost) center / cover;
     box-shadow: var(--shadow-overlay);
     translate: calc(-100% - 24px) 0;
+  }
+
+  .browser-sidebar[data-custom-background][data-hidden] {
+    background: var(--color-chrome);
+  }
+
+  .browser-sidebar[data-custom-background][data-handing]::before {
+    background: none;
   }
 
   /* On its way out beside the new tab: where it stood, out of the row. */

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { layout } from "../lib/layout";
+import { layout, WINDOWS_CAPTION } from "../lib/layout";
 
 const FULL = { controls: [32, 32], clock: true };
 
@@ -41,4 +41,16 @@ describe("layout", () => {
   it("never lets the name ride up under the notch on a short page", () => {
     expect(layout(1200, 300, FULL).mark.y).toBeGreaterThanOrEqual(82);
   });
+});
+
+it("removes the wordmark's height and clock gap while retaining the caption reserve", () => {
+  const normal = layout(1200, 800, { ...FULL, caption: WINDOWS_CAPTION });
+  const hidden = layout(1200, 800, { ...FULL, wordmark: false, caption: WINDOWS_CAPTION });
+  expect(hidden.mark.h).toBe(0);
+  expect(hidden.when).toBe(hidden.mark.y);
+  expect(hidden.when).toBeLessThan(normal.when!);
+  expect(hidden.controls).toEqual(normal.controls);
+  expect(hidden.notch).toEqual(normal.notch);
+  expect(WINDOWS_CAPTION).toBe(138);
+  expect(layout(1200, 800, { ...FULL, wordmark: false, clock: false }).when).toBeNull();
 });

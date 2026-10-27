@@ -41,7 +41,8 @@ export function layout(
     controls,
     clock,
     caption = 0,
-  }: { controls: readonly number[]; clock: boolean; caption?: number },
+    wordmark = true,
+  }: { controls: readonly number[]; clock: boolean; caption?: number; wordmark?: boolean },
 ): Layout {
   // Both top corners stay clear of the notch's flare for the controls in
   // one of them, so the field stays in the middle however wide they are.
@@ -70,8 +71,9 @@ export function layout(
   // date read on one line under it.
   const horizon = Math.round(height * (height < 600 ? 0.62 : 0.6));
   const markW = Math.round(Math.min(480, Math.max(260, width * 0.36)));
-  const markH = Math.ceil((markW * WORDMARK.height) / WORDMARK.width);
-  const group = markH + (clock ? WHEN.gap + WHEN.height : 0);
+  const markH = wordmark ? Math.ceil((markW * WORDMARK.height) / WORDMARK.width) : 0;
+  const clockGap = wordmark ? WHEN.gap : 0;
+  const group = markH + (clock ? clockGap + WHEN.height : 0);
   const centre = NOTCH.height + (horizon - NOTCH.height) * 0.74;
   const top = Math.max(NOTCH.height + 32, Math.round(centre - group / 2));
   const mark = { x: Math.round((width - markW) / 2), y: top, w: markW, h: markH };
@@ -81,6 +83,6 @@ export function layout(
     controls: buttons,
     horizon,
     mark,
-    when: clock ? top + markH + WHEN.gap : null,
+    when: clock ? top + markH + clockGap : null,
   };
 }
