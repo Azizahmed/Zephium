@@ -78,15 +78,17 @@ impl Script {
                             json!({"kind": "reply", "title": "Shorter trip", "data": {
                             "headline": "Home a day early", "text": "The plan now ends on Friday."}}),
                         ),
-                        call(
-                            "r5",
-                            "create",
-                            json!({"kind": "plan", "title": "Your trip, shorter", "data": {"steps": [
-                                {"title": "Fly home early", "kind": "travel"}]}}),
-                        ),
                     ]
                 }
-                2 => {
+                // This update depends on r2's durable revision. A later model
+                // turn observes that settlement instead of racing its read.
+                2 => vec![call(
+                    "r5",
+                    "create",
+                    json!({"kind": "plan", "title": "Your trip, shorter", "data": {"steps": [
+                        {"title": "Fly home early", "kind": "travel"}]}}),
+                )],
+                3 => {
                     // A second plan on the same subject revises the first.
                     assert!(!seen.contains("already covers this subject"), "{seen}");
                     vec![call(
@@ -797,21 +799,31 @@ async fn a_lead_run_splits_into_parts_builds_the_result_and_revises_on_follow_up
     .unwrap();
     let follow_up = second.executions.last().unwrap();
     assert!(follow_up.parts.is_empty());
-    let revised = follow_up
+    let plans: Vec<_> = follow_up
         .artifacts
         .iter()
-        .find(|a| a.data.kind_name() == "plan")
-        .unwrap();
+        .filter(|a| a.data.kind_name() == "plan")
+        .collect();
+    // Both settled updates remain immutable history; only the newest stands.
+    assert_eq!(plans.len(), 2);
+    let (revised, latest) = (plans[0], plans[1]);
     assert_eq!(revised.revises, Some(object("plan").id));
     assert_eq!(revised.title, "Your trip");
-    assert_eq!(
-        follow_up
-            .artifacts
-            .iter()
-            .filter(|a| a.data.kind_name() == "plan")
-            .count(),
-        1
-    );
+    assert_eq!(latest.revises, Some(revised.id));
+    let canvas = crate::work_lead::objects::canvas(&second, follow_up.id);
+    let current: Vec<_> = canvas
+        .iter()
+        .filter(|object| object.current && object.artifact.data.kind_name() == "plan")
+        .collect();
+    assert_eq!(current.len(), 1);
+    assert_eq!(current[0].artifact.id, latest.id);
+    assert_eq!(current[0].artifact.title, "Your trip");
+    let WorkArtifactDataV1::Plan { steps, .. } = &current[0].artifact.data else {
+        panic!("the current plan")
+    };
+    assert_eq!(steps.len(), 1);
+    assert_eq!(steps[0].title, "Fly home early");
+    assert_eq!(steps[0].when, None);
 }
 
 /// A part whose site fails says what it needs; the lead may not stand a
