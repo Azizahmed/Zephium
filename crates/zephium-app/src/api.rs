@@ -565,6 +565,9 @@ pub enum Command {
     SetWebExtensions {
         profile: ProfileId,
         extensions: Vec<zephium_core::ports::engine::WebExtensionLoad>,
+        /// Package preparation failures for this exact profile/install set.
+        failures: Vec<(zephium_core::ids::ExtensionInstallId, String)>,
+        retry: Option<zephium_core::ids::ExtensionInstallId>,
     },
     /// Opens an extension's options page in a tab.
     OpenWebExtensionOptions {

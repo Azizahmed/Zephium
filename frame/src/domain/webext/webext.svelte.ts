@@ -135,10 +135,10 @@ export async function openOptions(id: string): Promise<void> {
   if (result.status !== "ok") failure = result.error;
 }
 
-// Turning it off and on starts it from scratch.
-export async function retry(id: string): Promise<void> {
-  await setEnabled(id, false);
-  await setEnabled(id, true);
+export async function retry(extension: WebExtensionView): Promise<void> {
+  const result = await commands.webExtensionRetry(extension.profile_id, extension.install_id);
+  failure = result.status === "ok" ? null : result.error;
+  await refresh();
 }
 
 export async function uninstall(id: string): Promise<void> {

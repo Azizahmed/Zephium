@@ -131,6 +131,7 @@ async fn update(
     let pending = staged.pending;
     let fresh = &pending.entry;
     if needs_review {
+        let mut changed = Vec::new();
         discard(&pending);
         let _publication = super::PUBLICATION
             .lock()
@@ -144,9 +145,10 @@ async fn update(
                     && !entry.sideloaded
             }) {
                 entry.held_update = Some(fresh.version.clone());
-                extensions.save(*profile, &registry)?;
+                changed.push((*profile, registry));
             }
         }
+        save_holders(extensions, changed)?;
         return Ok(());
     }
 
@@ -170,15 +172,28 @@ async fn update(
                 access: entry.access.clone(),
                 ..fresh.clone()
             };
-            extensions.save(*profile, &registry)?;
             changed.push((*profile, registry));
         }
     }
+    let changed = save_holders(extensions, changed)?;
     drop(publication);
     for (profile, mut registry) in changed {
         extensions.apply(shell, profile, &mut registry);
     }
     Ok(())
+}
+
+fn save_holders(
+    extensions: &WebExtensions,
+    holders: Vec<(ProfileId, crate::webext::Registry)>,
+) -> Result<Vec<(ProfileId, crate::webext::Registry)>, String> {
+    let mut saved = Vec::new();
+    for (profile, registry) in holders {
+        if extensions.save_holder(profile, &registry)? {
+            saved.push((profile, registry));
+        }
+    }
+    Ok(saved)
 }
 
 fn requires_review(root: &Path, profile: ProfileId, old: &Entry, fresh: &Entry) -> bool {
@@ -272,6 +287,46 @@ fn permission_baseline(root: &Path, profile: ProfileId, old: &Entry) -> Option<V
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn deleted_update_holder_does_not_abort_other_profiles() {
+        let root = tempfile::tempdir().unwrap();
+        let extensions = WebExtensions {
+            root: root.path().to_owned(),
+            state: Default::default(),
+        };
+        let deleted = ProfileId::generate();
+        let survivor = ProfileId::generate();
+        let signed = include_bytes!("../../../tests/fixtures/webext-native.crx");
+        let verified = crx::verify(signed, None).unwrap();
+        let staged = stage(
+            root.path(),
+            Source::Store(verified.id, signed.to_vec()),
+            survivor,
+            &[],
+        )
+        .unwrap();
+        let mut registry = crate::webext::Registry {
+            extensions: vec![staged.pending.entry],
+        };
+        extensions.save(deleted, &registry).unwrap();
+        extensions.save(survivor, &registry).unwrap();
+        registry.extensions[0].version = "2.0".into();
+        registry.extensions[0].held_update = Some("3.0".into());
+        // Both registries were read for this update; deletion overtakes publication.
+        std::fs::remove_file(extensions.registry_path(deleted)).unwrap();
+        let updated = save_holders(
+            &extensions,
+            vec![(deleted, registry.clone()), (survivor, registry)],
+        )
+        .unwrap();
+        assert_eq!(updated.len(), 1);
+        assert_eq!(updated[0].0, survivor);
+        let surviving = extensions.registry(survivor);
+        assert_eq!(surviving.extensions[0].version, "2.0");
+        assert_eq!(surviving.extensions[0].held_update.as_deref(), Some("3.0"));
+        assert!(!extensions.registry_path(deleted).exists());
+    }
 
     #[test]
     fn legacy_updates_keep_proven_ordinary_grants_without_inheriting_native_transport() {

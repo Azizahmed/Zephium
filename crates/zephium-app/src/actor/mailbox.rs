@@ -337,6 +337,13 @@ fn retain_post_barrier(commands: &mut VecDeque<Command>, command: Command) {
 }
 
 impl CommandQueue {
+    pub(crate) fn is_accepting_commands(&self) -> bool {
+        self.inner
+            .state
+            .lock()
+            .is_ok_and(|state| !state.closed && !state.shutdown_enqueued)
+    }
+
     #[cfg(feature = "work-execution")]
     pub(crate) fn schedule_work(&self, deadline: Option<std::time::Instant>) {
         let mut timer = self

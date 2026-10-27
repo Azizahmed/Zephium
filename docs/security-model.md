@@ -2037,3 +2037,20 @@ Profile deletion removes the exact extension registry, its temporary file and
 profile-owned staging through the existing deletion journal. Cleanup failures
 retain that journal entry for retry. Package preparation does not hold a profile
 lifetime lease. Shared package collection remains with the extension cache prune.
+
+Startup compatibility rebuilding runs on the blocking worker pool, using
+profile-independent temporary package directories. Prepared registry commits
+compare the exact captured registry bytes under a short commit/unlink guard;
+profile deletion, uninstall and newer access choices win over stale work.
+That guard never covers package preparation or native work and does not lease a
+profile lifetime. Shutdown seals background admission, and the shell rejects
+late results for missing, deleting or private profiles. Bounded preparation
+failures join the existing per-profile extension status readback; Retry carries
+the displayed profile and installation identity in one native request.
+
+Ordinary extension mutations cannot recreate a missing registry. A fresh install
+registers a bounded, revocable ticket before final native profile validation;
+Store deletion cancels matching live tickets under the registry guard. A ticket
+holds no deletion lease and dead tickets leave no profile history. Once startup
+restore finishes, a missing runtime status is a visible failure even if bounded
+actor admission rejected the startup delivery.

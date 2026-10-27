@@ -4508,6 +4508,34 @@ fn extension_profile_deletion_erases_registry_temporary_and_owned_staging() {
 }
 
 #[test]
+fn extension_profile_deletion_revokes_publication_without_waiting_for_ticket_drop() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut hub = Hub::open(dir.path().to_path_buf()).unwrap();
+    let state = sample();
+    let profile = state.profiles[0].id;
+    hub.save(&state).unwrap();
+    let root = dir.path().join("webext");
+    std::fs::create_dir_all(&root).unwrap();
+    let root = std::fs::canonicalize(root).unwrap();
+    let (ticket, unrelated) = {
+        let mut io = zephium_core::extensions::REGISTRY_IO.lock().unwrap();
+        (
+            io.register(root.clone(), profile).unwrap(),
+            io.register(root.clone(), ProfileId::from(999)).unwrap(),
+        )
+    };
+    assert_eq!(
+        hub.authorize_profile_deletion(profile, &SessionState::default())
+            .unwrap(),
+        ProfileDeletionAuthorizeOutcome::Authorized
+    );
+    assert!(hub.finalize_profile_deletion(profile).unwrap());
+    let _io = zephium_core::extensions::REGISTRY_IO.lock().unwrap();
+    assert!(!ticket.allows(&root, profile));
+    assert!(unrelated.allows(&root, ProfileId::from(999)));
+}
+
+#[test]
 fn extension_profile_deletion_does_not_wait_for_package_publication() {
     let dir = tempfile::tempdir().unwrap();
     let mut hub = Hub::open(dir.path().to_path_buf()).unwrap();

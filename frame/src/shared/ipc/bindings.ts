@@ -317,6 +317,8 @@ export const commands = {
 	webExtensionCancel: (reviewId: string) => __TAURI_INVOKE<void>("web_extension_cancel", { reviewId }),
 	webExtensionList: () => typedError<WebExtensionView[], string>(__TAURI_INVOKE("web_extension_list")),
 	webExtensionSetEnabled: (id: string, enabled: boolean) => typedError<null, string>(__TAURI_INVOKE("web_extension_set_enabled", { id, enabled })),
+	/**  Retries only the exact installation displayed in the Extensions page. */
+	webExtensionRetry: (profileId: string, installId: string) => typedError<null, string>(__TAURI_INVOKE("web_extension_retry", { profileId, installId })),
 	webExtensionUninstall: (id: string) => typedError<null, string>(__TAURI_INVOKE("web_extension_uninstall", { id })),
 	/**
 	 *  Answers an extension's run-time request for access; granted access is
@@ -3500,6 +3502,8 @@ export type WebExtensionReview = {
 };
 
 export type WebExtensionView = {
+	profile_id: string,
+	install_id: string,
 	id: string,
 	name: string,
 	version: string,

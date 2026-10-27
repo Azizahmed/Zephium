@@ -90,7 +90,7 @@ pub(in crate::webext) async fn prepare(
         .ok_or("Open an extension's Chrome Web Store page first.")?;
     let id = store::listing_id(&listing).ok_or("This isn't an extension page.")?;
     let bytes = download(&id).await?;
-    review(extensions, target.profile, Source::Store(id, bytes)).await
+    review(shell, extensions, target.profile, Source::Store(id, bytes)).await
 }
 
 /// Reviews an extension file or unpacked folder.
@@ -100,7 +100,7 @@ pub(in crate::webext) async fn prepare_file(
     path: PathBuf,
 ) -> Result<WebExtensionReview, String> {
     let profile = target(shell, None).await?.profile;
-    review(extensions, profile, Source::File(path)).await
+    review(shell, extensions, profile, Source::File(path)).await
 }
 
 pub(in crate::webext) async fn choose_file(
@@ -138,10 +138,11 @@ pub(in crate::webext) async fn review_update(
     let profile = target(shell, None).await?.profile;
     let id = ExtensionId::parse(id).ok_or("That extension isn't installed.")?;
     let bytes = download(&id).await?;
-    review(extensions, profile, Source::Store(id, bytes)).await
+    review(shell, extensions, profile, Source::Store(id, bytes)).await
 }
 
 async fn review(
+    shell: &Handle,
     extensions: &WebExtensions,
     profile: ProfileId,
     source: Source,
@@ -171,6 +172,16 @@ async fn review(
         tauri::async_runtime::spawn_blocking(move || stage(&root, source, profile, &installed))
             .await
             .map_err(|_| "Installation failed.")??;
+    // Staging owns no profile lease. If deletion or a profile switch overtook
+    // preparation, discard the completed tree rather than retain a dead review.
+    if target(shell, None).await.map(|target| target.profile) != Ok(profile) {
+        crate::webext::publication(move || {
+            discard(&staged.pending);
+            Ok(())
+        })
+        .await?;
+        return Err("The extension profile changed. Choose the package again.".into());
+    }
     let review = staged.review.clone();
     #[cfg(target_os = "windows")]
     let review = {
@@ -392,6 +403,7 @@ pub(in crate::webext) fn confirm(
     shell: &Handle,
     extensions: &WebExtensions,
     mut pending: Pending,
+    ticket: zephium_core::extensions::ExtensionPublicationTicket,
 ) -> Result<(), String> {
     let id = pending.entry.id.clone();
     let publication = super::PUBLICATION
@@ -416,7 +428,11 @@ pub(in crate::webext) fn confirm(
 
     registry.extensions.retain(|entry| entry.id != id);
     registry.extensions.push(pending.entry);
-    extensions.save(pending.profile, &registry)?;
+    if pending.previous.is_some() {
+        extensions.save_existing(pending.profile, &registry)?;
+    } else {
+        extensions.save_new(pending.profile, &registry, &ticket)?;
+    }
     drop(publication);
     extensions.apply(shell, pending.profile, &mut registry);
     Ok(())
@@ -522,7 +538,7 @@ pub(super) fn keep_original(
     }
 }
 
-pub(super) fn discard(pending: &Pending) {
+pub(in crate::webext) fn discard(pending: &Pending) {
     crate::webext::discard_pending(pending);
 }
 
@@ -728,47 +744,6 @@ mod tests {
             .rebuild(ProfileId::from(1), &mut legacy, &trusted.compat)
             .is_err());
     }
-    #[tokio::test]
-    async fn cancelling_a_folder_review_erases_both_prepared_and_frozen_trees() {
-        let root = tempfile::tempdir().unwrap();
-        let source = root.path().join("developer");
-        std::fs::create_dir(&source).unwrap();
-        std::fs::write(
-            source.join("manifest.json"),
-            r#"{"manifest_version":3,"name":"Fixture","version":"1.0","key":"Zml4dHVyZQ=="}"#,
-        )
-        .unwrap();
-        std::fs::write(source.join("worker.js"), "original source").unwrap();
-        let staged = stage(
-            root.path(),
-            Source::File(source.clone()),
-            ProfileId::generate(),
-            &[],
-        )
-        .unwrap();
-        let prepared = staged.pending.staged.clone();
-        let frozen = match &staged.pending.original {
-            Original::Folder(path) => path.clone(),
-            _ => panic!("folder source required"),
-        };
-        let review_id = staged.review.review_id;
-        let extensions = WebExtensions {
-            root: root.path().to_path_buf(),
-            state: std::sync::Mutex::new(Some(staged.pending)),
-        };
-        let pending = crate::webext::cancel_pending(&extensions, &review_id).unwrap();
-        crate::webext::discard_cancelled(pending).await;
-        assert!(!prepared.exists());
-        assert!(
-            !frozen.exists(),
-            "cancellation retained the frozen developer source"
-        );
-        assert_eq!(
-            std::fs::read_to_string(source.join("worker.js")).unwrap(),
-            "original source"
-        );
-    }
-
     #[test]
     fn legacy_store_rebuild_recovers_only_verified_granted_permissions() {
         for (name, expected) in [("webext-native-app", true), ("webext-native", false)] {
@@ -871,7 +846,19 @@ mod tests {
         };
         extensions.save(profile, &registry).unwrap();
         std::fs::create_dir(extensions.registry_path(profile).with_extension("json.tmp")).unwrap();
-        let loads = extensions.native_loads(profile, &mut registry);
+        let mut loads = Vec::new();
+        assert!(extensions.apply_with(
+            profile,
+            &mut registry,
+            || true,
+            |command| {
+                let zephium_app::Command::SetWebExtensions { extensions, .. } = command else {
+                    panic!("wrong command")
+                };
+                loads = extensions;
+                true
+            }
+        ));
         assert_eq!(
             loads.len(),
             2,
@@ -879,6 +866,274 @@ mod tests {
         );
         assert!(!loads[0].start_background);
         assert!(loads[1].start_background);
+    }
+
+    fn installed_fixture() -> (tempfile::TempDir, WebExtensions, ProfileId, Entry) {
+        let root = tempfile::tempdir().unwrap();
+        let extensions = WebExtensions {
+            root: root.path().to_path_buf(),
+            state: Default::default(),
+        };
+        let profile = ProfileId::generate();
+        let bytes = include_bytes!("../../../tests/fixtures/webext-native.crx");
+        let verified = crx::verify(bytes, None).unwrap();
+        let staged = stage(
+            root.path(),
+            Source::Store(verified.id, bytes.to_vec()),
+            profile,
+            &[],
+        )
+        .unwrap();
+        publish(
+            &extensions.packages(&staged.pending.entry.id),
+            &staged.pending,
+        )
+        .unwrap();
+        std::fs::remove_dir_all(extensions.root.join("staging").join(profile.to_string())).unwrap();
+        let mut entry = staged.pending.entry;
+        entry.compat.clear();
+        extensions
+            .save(
+                profile,
+                &crate::webext::Registry {
+                    extensions: vec![entry.clone()],
+                },
+            )
+            .unwrap();
+        (root, extensions, profile, entry)
+    }
+
+    #[test]
+    fn rebuild_failure_reaches_the_profile_install_status_without_a_native_load() {
+        let (_root, extensions, profile, entry) = installed_fixture();
+        std::fs::remove_file(
+            extensions
+                .packages(&entry.id)
+                .join(format!("{}.crx", entry.source)),
+        )
+        .unwrap();
+        let mut registry = crate::webext::Registry::default();
+        assert!(extensions.apply_with(
+            profile,
+            &mut registry,
+            || true,
+            |command| {
+                let zephium_app::Command::SetWebExtensions {
+                    extensions: loads,
+                    failures,
+                    profile: actual,
+                    ..
+                } = command
+                else {
+                    panic!("wrong command")
+                };
+                assert_eq!(actual, profile);
+                assert!(loads.is_empty());
+                assert_eq!(failures.len(), 1);
+                assert_eq!(failures[0].0.to_string(), entry.install);
+                assert!(failures[0].1.contains("could not be prepared"));
+                true
+            }
+        ));
+    }
+
+    #[test]
+    fn retry_does_not_prepare_a_replaced_or_disabled_installation() {
+        let (_root, extensions, profile, entry) = installed_fixture();
+        let original = std::fs::read(extensions.registry_path(profile)).unwrap();
+        let mut registry = crate::webext::Registry::default();
+        assert!(extensions
+            .prepare_profile(profile, &mut registry, Some(ExtensionInstallId::generate()))
+            .is_none());
+        assert_eq!(
+            std::fs::read(extensions.registry_path(profile)).unwrap(),
+            original
+        );
+        assert!(registry.extensions[0].compat.is_empty());
+        registry.extensions[0].enabled = false;
+        extensions.save(profile, &registry).unwrap();
+        assert!(extensions
+            .prepare_profile(
+                profile,
+                &mut registry,
+                ExtensionInstallId::parse(&entry.install)
+            )
+            .is_none());
+        assert!(registry.extensions[0].compat.is_empty());
+    }
+
+    #[test]
+    fn hardening_ordinary_mutations_cannot_recreate_a_deleted_registry() {
+        let (_root, extensions, profile, _entry) = installed_fixture();
+        let mut registry = extensions.registry(profile);
+        std::fs::remove_file(extensions.registry_path(profile)).unwrap();
+        registry.extensions[0].enabled = false;
+        assert!(extensions.save_existing(profile, &registry).is_err());
+        assert!(!extensions.registry_path(profile).exists());
+        assert!(!extensions
+            .registry_path(profile)
+            .with_extension("json.tmp")
+            .exists());
+    }
+
+    #[test]
+    fn hardening_fresh_install_ticket_is_revoked_when_deletion_overtakes_validation() {
+        let (_root, extensions, profile, _entry) = installed_fixture();
+        let registry = extensions.registry(profile);
+        // Ticket registration precedes shell validation. This cancellation may
+        // happen before its response, or between that response and final save.
+        let ticket = crate::webext::imp::publication_ticket(&extensions, profile).unwrap();
+        {
+            let root = std::fs::canonicalize(&extensions.root).unwrap();
+            let mut io = zephium_core::extensions::REGISTRY_IO.lock().unwrap();
+            io.cancel(&root, profile);
+            std::fs::remove_file(extensions.registry_path(profile)).unwrap();
+        }
+        assert!(extensions.save_new(profile, &registry, &ticket).is_err());
+        assert!(!extensions.registry_path(profile).exists());
+    }
+
+    #[test]
+    fn completed_rebuild_cannot_restore_a_deleted_or_changed_registry() {
+        for change in ["delete", "disable", "access", "uninstall", "shutdown"] {
+            let (_root, extensions, profile, entry) = installed_fixture();
+            let mut registry = crate::webext::Registry::default();
+            let prepared = extensions
+                .prepare_profile(profile, &mut registry, None)
+                .unwrap();
+            let mut current = extensions.registry(profile);
+            match change {
+                "delete" => {
+                    let _io = zephium_core::extensions::REGISTRY_IO.lock().unwrap();
+                    std::fs::remove_file(extensions.registry_path(profile)).unwrap();
+                }
+                "disable" => {
+                    current.extensions[0].enabled = false;
+                    extensions.save(profile, &current).unwrap();
+                }
+                "access" => {
+                    current.extensions[0].access = crate::webext::Access::Click;
+                    extensions.save(profile, &current).unwrap();
+                }
+                "uninstall" => {
+                    current.extensions.clear();
+                    extensions.save(profile, &current).unwrap();
+                }
+                _ => {}
+            }
+            let baseline = std::fs::read(extensions.registry_path(profile)).ok();
+            assert!(!extensions.commit_prepared(
+                profile,
+                &registry,
+                prepared,
+                || change != "shutdown",
+                |_| panic!("stale rebuild reached native admission")
+            ));
+            assert_eq!(
+                std::fs::read(extensions.registry_path(profile)).ok(),
+                baseline
+            );
+            assert!(!extensions
+                .root
+                .join("staging")
+                .join(profile.to_string())
+                .exists());
+            assert_eq!(entry.install, registry.extensions[0].install);
+        }
+    }
+
+    #[tokio::test]
+    async fn cancelling_a_folder_review_erases_both_prepared_and_frozen_trees() {
+        let root = tempfile::tempdir().unwrap();
+        let source = root.path().join("developer");
+        std::fs::create_dir(&source).unwrap();
+        std::fs::write(
+            source.join("manifest.json"),
+            r#"{"manifest_version":3,"name":"Fixture","version":"1.0","key":"Zml4dHVyZQ=="}"#,
+        )
+        .unwrap();
+        std::fs::write(source.join("worker.js"), "original source").unwrap();
+        let staged = stage(
+            root.path(),
+            Source::File(source.clone()),
+            ProfileId::generate(),
+            &[],
+        )
+        .unwrap();
+        let prepared = staged.pending.staged.clone();
+        let frozen = match &staged.pending.original {
+            Original::Folder(path) => path.clone(),
+            _ => panic!("folder source required"),
+        };
+        let review_id = staged.review.review_id;
+        let extensions = WebExtensions {
+            root: root.path().to_path_buf(),
+            state: std::sync::Mutex::new(Some(staged.pending)),
+        };
+        let pending = crate::webext::cancel_pending(&extensions, &review_id).unwrap();
+        crate::webext::discard_cancelled(pending).await;
+        assert!(!prepared.exists());
+        assert!(
+            !frozen.exists(),
+            "cancellation retained the frozen developer source"
+        );
+        assert_eq!(
+            std::fs::read_to_string(source.join("worker.js")).unwrap(),
+            "original source"
+        );
+    }
+
+    #[test]
+    fn saturated_confirmation_retains_the_managed_folder_review() {
+        let root = tempfile::tempdir().unwrap();
+        let source = root.path().join("developer");
+        std::fs::create_dir(&source).unwrap();
+        std::fs::write(
+            source.join("manifest.json"),
+            r#"{"manifest_version":3,"name":"Fixture","version":"1.0","key":"Zml4dHVyZQ=="}"#,
+        )
+        .unwrap();
+        let staged = stage(
+            root.path(),
+            Source::File(source),
+            ProfileId::generate(),
+            &[],
+        )
+        .unwrap();
+        let id = staged.pending.entry.id.clone();
+        let review = staged.pending.review_id.clone();
+        let prepared = staged.pending.staged.clone();
+        let frozen = match &staged.pending.original {
+            Original::Folder(path) => path.clone(),
+            _ => panic!("folder source required"),
+        };
+        let extensions = WebExtensions {
+            root: root.path().to_owned(),
+            state: std::sync::Mutex::new(Some(staged.pending)),
+        };
+        let jobs = std::sync::atomic::AtomicUsize::new(0);
+        let mut slots = (0..8)
+            .map(|_| crate::webext::PublicationSlot::acquire(&jobs).unwrap())
+            .collect::<Vec<_>>();
+        assert!(
+            crate::webext::take_pending_for_publication(&extensions, &id, &review, &jobs).is_err()
+        );
+        assert!(
+            extensions
+                .state
+                .lock()
+                .unwrap()
+                .as_ref()
+                .is_some_and(|pending| pending.review_id == review),
+            "saturated confirmation consumed the only managed review"
+        );
+        assert!(prepared.exists() && frozen.exists());
+        drop(slots.pop());
+        let (_slot, pending) =
+            crate::webext::take_pending_for_publication(&extensions, &id, &review, &jobs).unwrap();
+        assert_eq!(pending.review_id, review);
+        discard(&pending);
+        assert!(!prepared.exists() && !frozen.exists());
     }
 
     #[test]
@@ -945,16 +1200,22 @@ mod tests {
         current.extensions[0].enabled = false;
         current.extensions[0].permissions.clear();
         extensions.save(profile, &current).unwrap();
-        let applied = extensions.apply_registry(profile, &captured);
+        let mut applied = captured.clone();
+        let prepared = extensions
+            .prepare_profile(profile, &mut applied, None)
+            .unwrap();
         assert!(!applied.extensions[0].enabled);
         assert!(applied.extensions[0].permissions.is_empty());
+        assert!(prepared.loads.is_empty());
+        drop(prepared);
         extensions
             .save(profile, &crate::webext::Registry::default())
             .unwrap();
-        assert!(extensions
-            .apply_registry(profile, &captured)
-            .extensions
-            .is_empty());
+        let prepared = extensions
+            .prepare_profile(profile, &mut applied, None)
+            .unwrap();
+        assert!(applied.extensions.is_empty());
+        assert!(prepared.loads.is_empty());
     }
 
     #[test]

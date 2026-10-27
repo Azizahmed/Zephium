@@ -123,6 +123,8 @@ pub(crate) struct WebExtensionReview {
 
 #[derive(Clone, Debug, Serialize, specta::Type)]
 pub(crate) struct WebExtensionView {
+    profile_id: String,
+    install_id: String,
     id: String,
     name: String,
     version: String,
@@ -166,7 +168,15 @@ impl WebExtensions {
         }
         #[cfg(any(target_os = "macos", target_os = "windows"))]
         {
-            imp::restore(self, shell);
+            let root = self.root.clone();
+            let callback = shell.callback_handle();
+            restore_in_background(move || {
+                let extensions = WebExtensions {
+                    root,
+                    state: Mutex::new(None),
+                };
+                imp::restore(&extensions, &callback);
+            });
             imp::start_updates(&self.root, shell);
         }
         #[cfg(not(any(target_os = "macos", target_os = "windows")))]
@@ -228,12 +238,64 @@ fn unseal(path: &Path) {
 const UNAVAILABLE: &str = "Extensions are unavailable in this build.";
 
 #[cfg(any(target_os = "macos", target_os = "windows"))]
+static PUBLICATION_JOBS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+struct PublicationSlot<'a>(&'a std::sync::atomic::AtomicUsize);
+
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+impl<'a> PublicationSlot<'a> {
+    fn acquire(jobs: &'a std::sync::atomic::AtomicUsize) -> Result<Self, String> {
+        jobs.fetch_update(
+            std::sync::atomic::Ordering::Relaxed,
+            std::sync::atomic::Ordering::Relaxed,
+            |active| (active < 8).then(|| active + 1),
+        )
+        .map_err(|_| "Extensions are busy. Try again in a moment.".to_owned())?;
+        Ok(Self(jobs))
+    }
+}
+
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+impl Drop for PublicationSlot<'_> {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 async fn publication(
     work: impl FnOnce() -> Result<(), String> + Send + 'static,
 ) -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(work)
-        .await
-        .map_err(|_| "Extension state is unavailable.".to_owned())?
+    let slot = PublicationSlot::acquire(&PUBLICATION_JOBS)?;
+    publication_reserved(slot, work).await
+}
+
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+async fn publication_reserved(
+    slot: PublicationSlot<'static>,
+    work: impl FnOnce() -> Result<(), String> + Send + 'static,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        // The job owns capacity even if its async caller stops waiting.
+        let _slot = slot;
+        work()
+    })
+    .await
+    .map_err(|_| "Extension state is unavailable.".to_owned())?
+}
+
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+fn take_pending_for_publication<'a>(
+    extensions: &WebExtensions,
+    id: &str,
+    review_id: &str,
+    jobs: &'a std::sync::atomic::AtomicUsize,
+) -> Result<(PublicationSlot<'a>, Pending), String> {
+    // Admission failure must leave the managed review and its snapshots owned.
+    let slot = PublicationSlot::acquire(jobs)?;
+    let pending = imp::take_pending(extensions, id, review_id)?;
+    Ok((slot, pending))
 }
 
 /// A recommended extension's icon as a data URL, or `None` while the store
@@ -293,12 +355,30 @@ pub(crate) async fn web_extension_confirm(
     {
         // Freeze the exact managed review before queueing blocking work: a
         // newer review may replace the slot while publication is waiting.
-        let pending = imp::take_pending(&extensions, &id, &review_id)?;
+        let (slot, pending) =
+            take_pending_for_publication(&extensions, &id, &review_id, &PUBLICATION_JOBS)?;
+        let ticket = match imp::publication_ticket(&extensions, pending.profile) {
+            Ok(ticket) => ticket,
+            Err(error) => {
+                return publication_reserved(slot, move || {
+                    imp::discard(&pending);
+                    Err(error)
+                })
+                .await
+            }
+        };
+        if imp::target(&shell, None).await.map(|target| target.profile) != Ok(pending.profile) {
+            return publication_reserved(slot, move || {
+                imp::discard(&pending);
+                Err("The extension profile changed. Review it again before installing.".into())
+            })
+            .await;
+        }
         let app = caller.app_handle().clone();
         let shell = shell.inner().clone();
-        publication(move || {
+        publication_reserved(slot, move || {
             let extensions = app.state::<WebExtensions>();
-            imp::confirm(&shell, &extensions, pending)
+            imp::confirm(&shell, &extensions, pending, ticket)
         })
         .await
     }
@@ -383,6 +463,36 @@ pub(crate) async fn web_extension_set_enabled(
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
         let _ = (shell, extensions, id, enabled);
+        Err(UNAVAILABLE.into())
+    }
+}
+
+/// Retries only the exact installation displayed in the Extensions page.
+#[tauri::command]
+#[specta::specta]
+pub(crate) async fn web_extension_retry(
+    caller: WebviewWindow,
+    shell: State<'_, Handle>,
+    extensions: State<'_, WebExtensions>,
+    profile_id: String,
+    install_id: String,
+) -> Result<(), String> {
+    if !authorize(&caller, CallerPolicy::Main, "web_extension_retry")
+        || shutdown_started(caller.app_handle())
+    {
+        return Err(UNAVAILABLE.into());
+    }
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    return imp::retry(
+        &shell,
+        &extensions,
+        ProfileId::parse(&profile_id).ok_or("Invalid profile.")?,
+        zephium_core::ids::ExtensionInstallId::parse(&install_id).ok_or("Invalid installation.")?,
+    )
+    .await;
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        let _ = (shell, extensions, profile_id, install_id);
         Err(UNAVAILABLE.into())
     }
 }
@@ -592,6 +702,34 @@ mod tests {
 
 #[cfg(all(test, any(target_os = "macos", target_os = "windows")))]
 mod publication_tests {
+    #[test]
+    fn publication_capacity_is_bounded_and_returns_after_drop_or_panic() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let jobs = AtomicUsize::new(0);
+        let mut slots = (0..8)
+            .map(|_| super::PublicationSlot::acquire(&jobs).unwrap())
+            .collect::<Vec<_>>();
+        let saturated = super::PublicationSlot::acquire(&jobs);
+        assert!(
+            saturated.is_err(),
+            "publication admitted an unbounded ninth job"
+        );
+        drop(saturated);
+        drop(slots.pop());
+        let returned = super::PublicationSlot::acquire(&jobs).unwrap();
+        assert_eq!(jobs.load(Ordering::Relaxed), 8);
+        let result = std::panic::catch_unwind(move || {
+            let _slot = returned;
+            panic!("fixture job panic");
+        });
+        assert!(result.is_err());
+        assert_eq!(jobs.load(Ordering::Relaxed), 7);
+        drop(slots);
+        assert_eq!(jobs.load(Ordering::Relaxed), 0);
+        drop(super::PublicationSlot::acquire(&jobs).unwrap());
+        assert_eq!(jobs.load(Ordering::Relaxed), 0);
+    }
+
     #[tokio::test(flavor = "current_thread")]
     async fn a_publication_lock_wait_leaves_the_command_executor_responsive() {
         let lease = std::sync::Arc::new(std::sync::Mutex::new(()));
@@ -629,4 +767,29 @@ mod publication_tests {
             "the executor must run while publication is blocked"
         );
     }
+}
+
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+fn restore_in_background(work: impl FnOnce() + Send + 'static) {
+    tauri::async_runtime::spawn_blocking(work);
+}
+
+#[cfg(all(test, any(target_os = "macos", target_os = "windows")))]
+#[test]
+fn startup_restore_never_waits_for_package_preparation() {
+    let (release, blocked) = std::sync::mpsc::sync_channel(1);
+    let (returned, result) = std::sync::mpsc::sync_channel(1);
+    let caller = std::thread::spawn(move || {
+        restore_in_background(move || {
+            let _ = blocked.recv_timeout(std::time::Duration::from_secs(3));
+        });
+        returned.send(()).unwrap();
+    });
+    let immediate = result.recv_timeout(std::time::Duration::from_millis(250));
+    release.send(()).unwrap();
+    caller.join().unwrap();
+    assert!(
+        immediate.is_ok(),
+        "setup waited for legacy package preparation"
+    );
 }
