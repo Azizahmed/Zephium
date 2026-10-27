@@ -1,13 +1,11 @@
 import { commands } from "$shared/ipc/bindings";
-import { IS_WINDOWS } from "$shared/platform";
 
 /** Compact is the rail that Work, Tasks and tools put the column into; the
  *  shape a person picks is expanded or hidden. */
 export type SidebarMode = "default" | "compact" | "hidden";
 
-/** Until Windows can bring a hidden column over a page, its toggle keeps the
- *  rail it has always had. */
-const PUT_AWAY: SidebarMode = IS_WINDOWS ? "compact" : "hidden";
+/** What the toggle puts the column into. */
+const PUT_AWAY: SidebarMode = "hidden";
 
 /** The rail width. Native admits it as a real sidebar width, not a mode flag. */
 export const COMPACT_WIDTH = 56;
