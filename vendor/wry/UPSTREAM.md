@@ -275,3 +275,12 @@ only those formatter changes are normalized. The existing eight-argument
 `attach_handlers` registration boundary carries a narrow lint expectation with
 its retained-owner rationale. Its signature/behavior is unchanged and workspace
 and standalone Clippy retain `-D warnings`.
+
+### Native class bundle identity compatibility (2026-10-27)
+
+The class-origin gate compares bundle pointers as numeric identities. It uses
+a pointer-to-`usize` cast, preserving that comparison under the inherited Rust
+1.77 manifest floor; `pointer.addr()` requires Rust 1.84. No pointer is recreated
+or dereferenced from the integer, and the admission policy is unchanged.
+The dependency graph and locked upstream versions remain unchanged. Strict
+standalone validation uses the manifest's default MSRV with no lint overrides.
