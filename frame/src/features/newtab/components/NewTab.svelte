@@ -11,6 +11,7 @@
   import { commands } from "$shared/ipc/bindings";
   import { events } from "$shared/ipc/native-events";
   import { preferences } from "$domain/preferences";
+  import { newTabImage, imageFailed } from "$session/newtab-background.svelte";
   import { taskCounts } from "$domain/resources";
   import { tabs } from "$domain/tabs";
   import Icon from "$shared/ui/Icon";
@@ -69,12 +70,27 @@
   let showAccount = $derived(!!onaccount && account.available);
   let signInWidth = $state(0);
   let profile = $derived(tabs.profile()?.id ?? null);
+  let picture = $derived(newTabImage());
+  let useSky = $derived(picture === null);
+  let background = $derived.by(() => {
+    const selected = picture;
+    return selected
+      ? import("./CustomBackground.svelte").catch(() => {
+          imageFailed(selected.key);
+          return null;
+        })
+      : null;
+  });
+  let showWordmark = $derived(preferences.value("ui.newtab-wordmark") !== "false");
+  let showTrackers = $derived(preferences.value("ui.newtab-trackers") !== "false");
   let showGreeting = $derived(preferences.value("ui.newtab-greeting") === "true");
   let showClock = $derived(preferences.value("ui.newtab-clock") === "true");
   let showDue = $derived(
     !incognito && preferences.enabled("tasks") && preferences.value("ui.newtab-tasks") === "true",
   );
-  let showFocus = $derived(preferences.enabled("time"));
+  let showFocus = $derived(
+    preferences.enabled("time") && preferences.value("ui.newtab-focus") !== "false",
+  );
   let today = $derived(dayKey(now));
 
   let firstName = $derived((tabs.profile()?.name ?? "").trim().split(/\s+/u)[0] ?? "");
@@ -109,11 +125,16 @@
     focusGoalMinutes > 0 ? Math.min(1, Math.max(0, focusMinutes / focusGoalMinutes)) : 0,
   );
 
-  // The figures a private window shows none of; what is due only while Tasks
-  // is wanted here. What the blocker stopped is always there, at nothing
-  // until it has stopped something.
+  // Private windows show no figures. Each requested figure closes up beside
+  // its neighbours; hidden figures do not read their counters.
   let figures = $derived(
-    incognito ? [] : ["trackers", ...(showFocus ? ["focus"] : []), ...(showDue ? ["due"] : [])],
+    incognito
+      ? []
+      : [
+          ...(showTrackers ? ["trackers"] : []),
+          ...(showFocus ? ["focus"] : []),
+          ...(showDue ? ["due"] : []),
+        ],
   );
 
   // Read when the page opens and with the minute's redraw while it shows, so
@@ -121,7 +142,7 @@
   $effect(() => {
     const owner = profile;
     void now;
-    if (!owner || incognito) {
+    if (!owner || incognito || !showTrackers) {
       blocked = null;
       return;
     }
@@ -164,6 +185,7 @@
     layout(width, height, {
       controls,
       clock: showClock,
+      wordmark: showWordmark,
       caption: IS_WINDOWS ? WINDOWS_CAPTION : 0,
     }),
   );
@@ -177,6 +199,7 @@
   const arriving = !seen(untrack(() => scene));
   let shown = $state<Scene | null>(seen(untrack(() => scene)) ? untrack(() => scene) : null);
   $effect(() => {
+    if (!useSky) return;
     const wanted = scene;
     let live = true;
     // A sky that cannot be decoded leaves the page its own colour; it never
@@ -198,6 +221,7 @@
   // told where the picture lies in the window whenever either moves.
   let section = $state<HTMLElement>();
   $effect(() => {
+    if (!useSky) return;
     const { y, h } = sky;
     const pageHeight = height;
     void width;
@@ -291,12 +315,13 @@
 <section
   bind:this={section}
   class="newtab"
-  class:arriving
-  class:entering={!arriving}
+  class:arriving={useSky && arriving}
+  class:entering={useSky && !arriving}
+  class:custom={!useSky}
   data-scene={scene}
-  data-ready={shown === scene}
+  data-ready={!useSky || shown === scene}
   aria-label={m.new_tab()}
-  style:--sky-frost={`url("${FROSTS[scene]}")`}
+  style:--sky-frost={useSky ? `url("${FROSTS[scene]}")` : undefined}
   style:--sky-frost-size={`${sky.w}px ${sky.h}px`}
   style:--sky-frost-x={`${sky.x - (width - fieldWidth) / 2}px`}
   style:--sky-frost-y={`${sky.y - page.notch.height}px`}
@@ -304,58 +329,76 @@
   bind:clientHeight={height}
 >
   {#if ground}<div class="page" aria-hidden="true" style:clip-path={`path(evenodd, "${ground}")`}>
-      <div
-        class="sky"
-        style:background-image={`url("${SCENES[scene]}")`}
-        style:background-size={`${sky.w}px ${sky.h}px`}
-        style:background-position={`${sky.x}px ${sky.y}px`}
-      ></div>
+      {#if picture && width > 0 && height > 0}
+        {#key picture.key}
+          {@const selected = picture}
+          {#await background then loaded}
+            {#if loaded}<loaded.default
+                profile={picture.profile}
+                digest={picture.digest}
+                {width}
+                {height}
+                dim={preferences.value("ui.newtab-dim") === "true"}
+                onfailure={() => {
+                  imageFailed(selected.key);
+                }}
+              />{/if}
+          {/await}
+        {/key}
+      {:else if useSky}<div
+          class="sky"
+          style:background-image={`url("${SCENES[scene]}")`}
+          style:background-size={`${sky.w}px ${sky.h}px`}
+          style:background-position={`${sky.x}px ${sky.y}px`}
+        ></div>{/if}
     </div>{/if}
 
   <!-- Light caught along the edge where the page meets the window, fading
        away from it: a strip as tall as the notch, so it is drawn once. -->
-  <svg class="rim" aria-hidden="true" style:height={`${page.notch.height + 1}px`}>
-    <defs>
-      <linearGradient id={`${id}-lip`} x1="0" y1="1" x2="0" y2="0">
-        <stop offset="0" class="lip" />
-        <stop offset="0.6" class="lip" stop-opacity="0" />
-      </linearGradient>
-    </defs>
-    <path d={lip} stroke={`url(#${id}-lip)`} />
-  </svg>
+  {#if useSky}<svg class="rim" aria-hidden="true" style:height={`${page.notch.height + 1}px`}>
+      <defs>
+        <linearGradient id={`${id}-lip`} x1="0" y1="1" x2="0" y2="0">
+          <stop offset="0" class="lip" />
+          <stop offset="0.6" class="lip" stop-opacity="0" />
+        </linearGradient>
+      </defs>
+      <path d={lip} stroke={`url(#${id}-lip)`} />
+    </svg>
+  {/if}
 
   <!-- The name, drawn only as large as itself. -->
-  <svg class="mark" role="img" aria-label="Zephium" style={at(page.mark)}>
-    <defs>
-      <path id={`${id}-letters`} d={WORDMARK.d} transform={letters} />
-      {#if glint}<linearGradient
-          id={`${id}-glint`}
-          gradientUnits="userSpaceOnUse"
-          x1={-page.mark.h * 3}
-          x2="0"
-          y1="0"
-          y2={page.mark.h}
-        >
-          <stop offset="0" class="glint" stop-opacity="0" />
-          <stop offset="0.5" class="glint" />
-          <stop offset="1" class="glint" stop-opacity="0" />
-          <animateTransform
-            attributeName="gradientTransform"
-            type="translate"
-            from="0 0"
-            to={`${page.mark.w + page.mark.h * 3} 0`}
-            begin="0.5s"
-            dur="1.3s"
-            calcMode="spline"
-            keyTimes="0;1"
-            keySplines="0.3 0 0.2 1"
-            fill="freeze"
-          />
-        </linearGradient>{/if}
-    </defs>
-    <use class="name" href={`#${id}-letters`} />
-    {#if glint}<use href={`#${id}-letters`} fill={`url(#${id}-glint)`} />{/if}
-  </svg>
+  {#if showWordmark}<svg class="mark" role="img" aria-label="Zephium" style={at(page.mark)}>
+      <defs>
+        <path id={`${id}-letters`} d={WORDMARK.d} transform={letters} />
+        {#if glint && useSky}<linearGradient
+            id={`${id}-glint`}
+            gradientUnits="userSpaceOnUse"
+            x1={-page.mark.h * 3}
+            x2="0"
+            y1="0"
+            y2={page.mark.h}
+          >
+            <stop offset="0" class="glint" stop-opacity="0" />
+            <stop offset="0.5" class="glint" />
+            <stop offset="1" class="glint" stop-opacity="0" />
+            <animateTransform
+              attributeName="gradientTransform"
+              type="translate"
+              from="0 0"
+              to={`${page.mark.w + page.mark.h * 3} 0`}
+              begin="0.5s"
+              dur="1.3s"
+              calcMode="spline"
+              keyTimes="0;1"
+              keySplines="0.3 0 0.2 1"
+              fill="freeze"
+            />
+          </linearGradient>{/if}
+      </defs>
+      <use class="name" href={`#${id}-letters`} />
+      {#if glint && useSky}<use href={`#${id}-letters`} fill={`url(#${id}-glint)`} />{/if}
+    </svg>
+  {/if}
 
   <!-- The band the field hangs in is the window's title bar: beside the
        field, it moves the window. -->
@@ -494,6 +537,15 @@
     background: transparent;
   }
 
+  .newtab.custom {
+    --sky-card: var(--color-field);
+    --sky-card-rim: var(--color-border);
+    --sky-card-edge: var(--color-border);
+    --disc-fill: var(--color-surface);
+    --sky-shadow: var(--newtab-image-dim);
+    --disc-rim: var(--color-border);
+  }
+
   .page,
   .sky {
     position: absolute;
@@ -507,7 +559,7 @@
   /* The picture eases off at the page's sides rather than ending at them,
      so a bright cloud sinks into the edge instead of meeting whatever the
      window's glass is showing beside it. */
-  .page::after {
+  .newtab:not(.custom) .page::after {
     position: absolute;
     inset: 0;
     background: linear-gradient(
@@ -779,6 +831,14 @@
     border-radius: inherit;
     background: var(--color-text);
     transform-origin: left center;
+  }
+
+  .custom .control {
+    --sky-ink: var(--color-text);
+  }
+
+  .custom .figure {
+    background: var(--color-surface);
   }
 
   /* A narrow pane keeps each figure to its icon and value on one row; the

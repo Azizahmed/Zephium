@@ -3807,5 +3807,18 @@
   "native_clear_data_for_this_site_more": "このサイトのデータを消去…",
   "page_permission_private": "プライベートウインドウではこの選択は保存されません。",
   "page_permission_location_off": "システム設定 › プライバシーとセキュリティで、Zephium の位置情報サービスをオンにしてください。",
-  "launcher_results_count": "結果: {count} 件"
+  "launcher_results_count": "結果: {count} 件",
+  "ntp_background": "背景",
+  "ntp_background_help": "画像はこのデバイスのこのプロファイル内に保存されます。",
+  "ntp_sky": "Zephiumの空",
+  "ntp_own_image": "自分の画像",
+  "ntp_choose_image": "画像を選択…",
+  "ntp_image_failed": "Zephiumで開ける画像を選んでください。",
+  "ntp_dim": "暗くする",
+  "ntp_dim_help": "画像を暗くして文字を読みやすくします。",
+  "ntp_wordmark": "ワードマーク",
+  "ntp_wordmark_help": "大きなZephiumの名前を表示します。",
+  "ntp_figures": "統計",
+  "ntp_reset": "初期設定に戻す",
+  "ntp_reset_help": "空の背景と新しいタブのすべての設定を元に戻します。"
 }

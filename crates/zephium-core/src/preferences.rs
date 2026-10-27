@@ -13,6 +13,12 @@ pub const KEYS: &[&str] = &[
     "ui.newtab-clock",
     "ui.newtab-clock-format",
     "ui.newtab-tasks",
+    "ui.newtab-background",
+    "ui.newtab-image",
+    "ui.newtab-dim",
+    "ui.newtab-wordmark",
+    "ui.newtab-trackers",
+    "ui.newtab-focus",
     "ui.tab-layout",
     "onboarding",
     "ai.enabled",
@@ -187,6 +193,16 @@ pub fn value_allowed(key: &str, value: &str) -> bool {
             value,
             "auto" | "liquid_glass" | "vibrancy" | "acrylic" | "mica" | "none"
         ),
+        "ui.newtab-background" => matches!(value, "sky" | "image"),
+        // An admitted local blob, never a URL or a filesystem path. The media
+        // protocol resolves it only inside the current profile's store.
+        "ui.newtab-image" => {
+            value.is_empty()
+                || (value.len() == 64
+                    && value
+                        .bytes()
+                        .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)))
+        }
         "ui.newtab-clock-format" => matches!(value, "system" | "12h" | "24h"),
         "ui.tab-layout" => matches!(value, "vertical" | "horizontal"),
         "ui.language" => LANGUAGES.contains(&value),
@@ -280,6 +296,10 @@ pub fn value_allowed(key: &str, value: &str) -> bool {
         | "ui.newtab-name"
         | "ui.newtab-clock"
         | "ui.newtab-tasks"
+        | "ui.newtab-dim"
+        | "ui.newtab-wordmark"
+        | "ui.newtab-trackers"
+        | "ui.newtab-focus"
         | "ai.enabled"
         | "work.enabled"
         | "notes.enabled"
@@ -303,6 +323,41 @@ pub fn value_allowed(key: &str, value: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn newtab_customization_accepts_only_local_images_and_closed_choices() {
+        for key in [
+            "ui.newtab-dim",
+            "ui.newtab-wordmark",
+            "ui.newtab-trackers",
+            "ui.newtab-focus",
+        ] {
+            assert!(KEYS.contains(&key));
+            assert!(value_allowed(key, "true"));
+            assert!(value_allowed(key, "false"));
+            assert!(!value_allowed(key, "1"));
+        }
+        for value in ["sky", "image"] {
+            assert!(value_allowed("ui.newtab-background", value));
+        }
+        assert!(!value_allowed("ui.newtab-background", "gradient"));
+        assert!(KEYS.contains(&"ui.newtab-background"));
+        assert!(KEYS.contains(&"ui.newtab-image"));
+        assert!(value_allowed("ui.newtab-image", ""));
+        assert!(value_allowed("ui.newtab-image", &"ab01".repeat(16)));
+        for value in [
+            "https://example.com/image.jpg",
+            "../image",
+            "/tmp/image",
+            "zephium-media://localhost/image",
+            &"A".repeat(64),
+            &"g".repeat(64),
+            &"a".repeat(63),
+            &"a".repeat(65),
+        ] {
+            assert!(!value_allowed("ui.newtab-image", value));
+        }
+    }
+
     #[test]
     fn performance_preferences_validate_modes_timing_and_normalized_exceptions() {
         for minutes in ["5", "15", "30", "60"] {

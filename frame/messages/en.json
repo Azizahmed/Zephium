@@ -3807,5 +3807,18 @@
   "native_clear_data_for_this_site_more": "Clear Data for This Site…",
   "page_permission_private": "Private windows don't save this choice.",
   "page_permission_location_off": "Turn on Location Services for Zephium in System Settings › Privacy & Security.",
-  "launcher_results_count": "Results: {count}"
+  "launcher_results_count": "Results: {count}",
+  "ntp_background": "Background",
+  "ntp_background_help": "Your image stays on this device, in this profile.",
+  "ntp_sky": "Zephium sky",
+  "ntp_own_image": "Your own image",
+  "ntp_choose_image": "Choose image…",
+  "ntp_image_failed": "Choose an image that Zephium can open.",
+  "ntp_dim": "Dim",
+  "ntp_dim_help": "Darken the image to make text easier to read.",
+  "ntp_wordmark": "Wordmark",
+  "ntp_wordmark_help": "Show the big Zephium name.",
+  "ntp_figures": "Figures",
+  "ntp_reset": "Reset to default",
+  "ntp_reset_help": "Restore the sky and all new tab settings."
 }

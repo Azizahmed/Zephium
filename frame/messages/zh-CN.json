@@ -3807,5 +3807,18 @@
   "native_clear_data_for_this_site_more": "清除此网站的数据…",
   "page_permission_private": "隐私窗口不会保存此选择。",
   "page_permission_location_off": "请在“系统设置 › 隐私与安全性”中为 Zephium 打开定位服务。",
-  "launcher_results_count": "{count} 个结果"
+  "launcher_results_count": "{count} 个结果",
+  "ntp_background": "背景",
+  "ntp_background_help": "图片仅保存在此设备的当前配置文件中。",
+  "ntp_sky": "Zephium 天空",
+  "ntp_own_image": "自己的图片",
+  "ntp_choose_image": "选择图片…",
+  "ntp_image_failed": "请选择 Zephium 能打开的图片。",
+  "ntp_dim": "调暗",
+  "ntp_dim_help": "调暗图片，让文字更易阅读。",
+  "ntp_wordmark": "文字标志",
+  "ntp_wordmark_help": "显示大号 Zephium 名称。",
+  "ntp_figures": "统计数据",
+  "ntp_reset": "恢复默认设置",
+  "ntp_reset_help": "恢复天空背景和所有新标签页设置。"
 }

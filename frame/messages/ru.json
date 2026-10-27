@@ -3807,5 +3807,18 @@
   "native_clear_data_for_this_site_more": "Очистить данные этого сайта…",
   "page_permission_private": "Приватные окна не сохраняют этот выбор.",
   "page_permission_location_off": "Включите службы геолокации для Zephium в разделе «Системные настройки › Конфиденциальность и безопасность».",
-  "launcher_results_count": "Результатов: {count}"
+  "launcher_results_count": "Результатов: {count}",
+  "ntp_background": "Фон",
+  "ntp_background_help": "Ваше изображение остаётся на этом устройстве, в этом профиле.",
+  "ntp_sky": "Небо Zephium",
+  "ntp_own_image": "Своё изображение",
+  "ntp_choose_image": "Выбрать изображение…",
+  "ntp_image_failed": "Выберите изображение, которое Zephium может открыть.",
+  "ntp_dim": "Затемнить",
+  "ntp_dim_help": "Затемнить изображение, чтобы текст было легче читать.",
+  "ntp_wordmark": "Название Zephium",
+  "ntp_wordmark_help": "Показывать крупное название Zephium.",
+  "ntp_figures": "Показатели",
+  "ntp_reset": "Восстановить по умолчанию",
+  "ntp_reset_help": "Восстановить небо и все настройки новой вкладки."
 }

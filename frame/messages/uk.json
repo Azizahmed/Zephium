@@ -3807,5 +3807,18 @@
   "native_clear_data_for_this_site_more": "Очистити дані цього сайту…",
   "page_permission_private": "Приватні вікна не зберігають цей вибір.",
   "page_permission_location_off": "Увімкніть служби локації для Zephium у Системних налаштуваннях › Приватність і безпека.",
-  "launcher_results_count": "Результатів: {count}"
+  "launcher_results_count": "Результатів: {count}",
+  "ntp_background": "Тло",
+  "ntp_background_help": "Ваше зображення залишається на цьому пристрої, у цьому профілі.",
+  "ntp_sky": "Небо Zephium",
+  "ntp_own_image": "Власне зображення",
+  "ntp_choose_image": "Вибрати зображення…",
+  "ntp_image_failed": "Виберіть зображення, яке Zephium може відкрити.",
+  "ntp_dim": "Затемнити",
+  "ntp_dim_help": "Затемнити зображення, щоб текст було легше читати.",
+  "ntp_wordmark": "Назва Zephium",
+  "ntp_wordmark_help": "Показувати велику назву Zephium.",
+  "ntp_figures": "Показники",
+  "ntp_reset": "Відновити типові налаштування",
+  "ntp_reset_help": "Відновити небо та всі налаштування нової вкладки."
 }

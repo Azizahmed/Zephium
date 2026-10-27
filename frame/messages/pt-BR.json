@@ -3807,5 +3807,18 @@
   "native_clear_data_for_this_site_more": "Limpar Dados Deste Site…",
   "page_permission_private": "Janelas privativas não salvam esta escolha.",
   "page_permission_location_off": "Ative os Serviços de Localização para o Zephium em Ajustes do Sistema › Privacidade e Segurança.",
-  "launcher_results_count": "Resultados: {count}"
+  "launcher_results_count": "Resultados: {count}",
+  "ntp_background": "Plano de fundo",
+  "ntp_background_help": "Sua imagem fica neste dispositivo, neste perfil.",
+  "ntp_sky": "Céu do Zephium",
+  "ntp_own_image": "Sua própria imagem",
+  "ntp_choose_image": "Escolher imagem…",
+  "ntp_image_failed": "Escolha uma imagem que o Zephium consiga abrir.",
+  "ntp_dim": "Escurecer",
+  "ntp_dim_help": "Escureça a imagem para facilitar a leitura do texto.",
+  "ntp_wordmark": "Nome Zephium",
+  "ntp_wordmark_help": "Mostrar o nome Zephium em destaque.",
+  "ntp_figures": "Estatísticas",
+  "ntp_reset": "Restaurar padrão",
+  "ntp_reset_help": "Restaurar o céu e todas as configurações da nova aba."
 }
