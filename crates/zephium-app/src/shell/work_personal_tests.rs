@@ -88,7 +88,7 @@ impl WorkModelClient for Script {
                 ],
                 1 => vec![
                     call("d", "recall", json!({"query": "aisle"})),
-                    call("e", "search_history", json!({"query": "hacker news"})),
+                    call("e", "search_history", json!({})),
                 ],
                 _ => vec![call("f", "finish", json!({"say": "Done."}))],
             };
@@ -286,6 +286,19 @@ async fn work_lead_remembers_asks_once_for_history_and_shows_what_it_read() {
         .unwrap();
     let work = create.work_id().unwrap();
     drive(&mut shell, &queue, create).await.unwrap();
+    drive(
+        &mut shell,
+        &queue,
+        crate::work_personal::consent(
+            &handle,
+            profile,
+            work,
+            WorkContextSourceV1::Tabs,
+            Some(false),
+        ),
+    )
+    .await
+    .unwrap();
     let script = Arc::new(Script {
         seen: Mutex::new(Vec::new()),
     });
@@ -325,6 +338,10 @@ async fn work_lead_remembers_asks_once_for_history_and_shows_what_it_read() {
         "{seen}"
     );
     assert!(seen.contains("Hacker News"), "{seen}");
+    assert!(
+        !seen.contains("\"open_tabs\""),
+        "history disclosed separately refused tabs: {seen}"
+    );
 
     assert_eq!(
         *asked.lock().unwrap(),
