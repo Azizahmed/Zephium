@@ -181,8 +181,8 @@ pub fn value_allowed(key: &str, value: &str) -> bool {
             value,
             "graphite" | "sky" | "sage" | "rose" | "amber" | "teal" | "lavender" | "orchid"
         ),
-        // What the window is made of. `auto` is the Zephium sky; a system
-        // material the system cannot install falls back on its own.
+        // What the window is made of. `auto` is the system's best glass; a
+        // system material the system cannot install falls back on its own.
         "ui.material" => matches!(
             value,
             "auto" | "liquid_glass" | "vibrancy" | "acrylic" | "mica" | "none"

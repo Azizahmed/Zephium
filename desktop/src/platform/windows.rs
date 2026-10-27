@@ -539,7 +539,7 @@ fn set_dark_frame(window: &WebviewWindow, dark: bool) {
 
 /// The browser window wears Mica Alt, the backdrop Windows 11 made for tabbed
 /// main windows: it takes the wallpaper's hue without its detail and stays
-/// put while the window is inactive. The frame lays the Zephium sky over it
+/// put while the window is inactive. The frame lays the sky's light over it
 /// on a new tab. Acrylic is a flyout's material, so only the launcher keeps
 /// it, and Windows 10, which has no Mica, falls back to it.
 pub fn apply_material(window: &WebviewWindow, dark: bool) -> bool {

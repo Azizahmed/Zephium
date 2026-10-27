@@ -50,12 +50,12 @@
   // material worth having; a Mac offers the glass or the older vibrancy.
   const materialOptions = IS_WINDOWS
     ? [
-        { value: "auto", label: m.settings_material_sky() },
+        { value: "auto", label: m.settings_material_automatic() },
         { value: "mica", label: m.settings_material_mica() },
         { value: "none", label: m.settings_material_solid() },
       ]
     : [
-        { value: "auto", label: m.settings_material_sky() },
+        { value: "auto", label: m.settings_material_automatic() },
         { value: "liquid_glass", label: m.settings_material_glass() },
         { value: "vibrancy", label: m.settings_material_vibrancy() },
         { value: "none", label: m.settings_material_solid() },

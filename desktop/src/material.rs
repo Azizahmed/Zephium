@@ -16,7 +16,7 @@ pub enum Material {
 /// install: a choice it cannot honour falls back down the same ladder.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Preference {
-    /// The system's best glass, with the Zephium sky over it on a new tab.
+    /// The system's best glass.
     #[default]
     Auto,
     LiquidGlass,
