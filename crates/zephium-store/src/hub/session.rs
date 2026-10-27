@@ -433,6 +433,19 @@ mod qa_settings_recovery_tests {
     }
 
     #[test]
+    fn a_session_kept_for_a_newer_zephium_opens_once_a_build_that_reads_it_is_back() {
+        // An older build met this session, could not read it and kept it;
+        // this build reads it, so it opens as it was.
+        let (dir, expected) = marked_directory(zephium_core::ports::store::NEWER_SESSION_REASON);
+        let mut hub = Hub::open(dir.path().to_path_buf()).unwrap();
+        assert!(hub.recovery_reason().is_none());
+        assert_eq!(
+            hub.load().unwrap().expect("the session is restored"),
+            expected
+        );
+    }
+
+    #[test]
     fn an_unrestorable_session_is_set_aside_and_its_profile_keeps_its_data() {
         let (dir, saved) = marked_directory("corrupt authoritative session snapshot");
         let profile = saved.profiles[0].id;
@@ -1070,23 +1083,29 @@ impl Hub {
         self.recovery_required.as_deref()
     }
 
-    /// Earlier builds put a valid session that was not in the then-exact
-    /// canonical form (an older QA build's Settings tab, or rules that
-    /// tightened later) into read-only recovery. Clear that specific marker
-    /// when its preserved bytes still equal the current bounded snapshot;
-    /// loading restores the canonical form and the next save publishes it.
-    pub(super) fn recover_canonical_form_quarantine(&mut self) -> rusqlite::Result<bool> {
-        const REASON: &str = "authoritative session is not in exact canonical form";
-        if self.recovery_required.as_deref() != Some(REASON) {
+    /// Lifts a recovery marker this build can see past, when its preserved
+    /// bytes still equal the current bounded snapshot and decode against the
+    /// registry. Two reasons qualify. Earlier builds put a valid session that
+    /// was not in the then-exact canonical form (an older QA build's Settings
+    /// tab, or rules that tightened later) into recovery; loading restores
+    /// the canonical form and the next save publishes it. And an older build
+    /// keeps a newer build's session for it: once a build that reads the
+    /// session is back, it opens again.
+    pub(super) fn recover_liftable_quarantine(&mut self) -> rusqlite::Result<bool> {
+        const CANONICAL_FORM: &str = "authoritative session is not in exact canonical form";
+        let Some(reason) = self.recovery_required.clone().filter(|reason| {
+            reason == CANONICAL_FORM || reason == zephium_core::ports::store::NEWER_SESSION_REASON
+        }) else {
             return Ok(false);
-        }
+        };
+        let reason = reason.as_str();
         let marker = self
             .meta
             .query_row(
                 "SELECT schema_version,
                         CASE WHEN length(CAST(data AS BLOB)) <= ?1 THEN data END
                  FROM session_recovery WHERE id = 1 AND reason = ?2",
-                params![MAX_SESSION_SNAPSHOT_BYTES as i64, REASON],
+                params![MAX_SESSION_SNAPSHOT_BYTES as i64, reason],
                 |row| {
                     Ok((
                         row.get::<_, Option<i64>>(0)?,
@@ -1120,8 +1139,8 @@ impl Hub {
         let Some(state) = decode_snapshot(&data, version) else {
             return Ok(false);
         };
-        // Loading now restores such a session in today's canonical form, so
-        // any quarantine for this reason alone is lifted once the preserved
+        // Loading now restores such a session in today's form, so a
+        // quarantine for this reason alone is lifted once the preserved
         // bytes still decode and match the registry.
         if self.validate_authoritative_registry(&state).is_err() {
             return Ok(false);
@@ -1133,7 +1152,7 @@ impl Hub {
                    SELECT 1 FROM session_snapshot
                    WHERE id = 1 AND schema_version = ?2 AND CAST(data AS BLOB) = ?3
                )",
-            params![REASON, version, marked_bytes],
+            params![reason, version, marked_bytes],
         )?;
         if removed != 1 {
             return Ok(false);
