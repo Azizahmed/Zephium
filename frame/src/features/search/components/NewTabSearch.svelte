@@ -85,7 +85,8 @@
   }
 
   function keydown(event: KeyboardEvent) {
-    if (surface.composing || event.isComposing) return;
+    // See LauncherPanel: WebKit's committing keydown arrives after compositionend.
+    if (surface.composing || event.isComposing || event.keyCode === 229) return;
     if (event.key === "ArrowDown" || event.key === "ArrowUp") {
       event.preventDefault();
       void surface.move(event.key === "ArrowDown" ? 1 : -1);
@@ -141,6 +142,7 @@
         maxlength: 2048,
         spellcheck: false,
         autocapitalize: "off",
+        autocorrect: "off",
         // Room for the clear control, which is placed over the field rather
         // than threaded through the shared primitive for one caller's sake.
         style: surface.query ? "padding-inline-end: 40px" : undefined,

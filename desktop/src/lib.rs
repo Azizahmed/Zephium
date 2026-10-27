@@ -643,11 +643,11 @@ fn on_main_window_mapped(window: &WebviewWindow) {
     linux_global_shortcuts::main_window_mapped(window);
 }
 
+/// DWM can discard the backdrop installed while the window was hidden.
+/// Restore it at the first reveal, not at some later focus event, and use
+/// the person's saved appearance rather than the operating-system default.
 #[cfg(target_os = "windows")]
-fn on_main_window_mapped(window: &WebviewWindow) {
-    // DWM can discard the backdrop installed while the window was hidden.
-    // Restore it at the first reveal, not at some later focus event, and use
-    // the person's saved appearance rather than the operating-system default.
+pub(crate) fn restore_window_material(window: &WebviewWindow) -> bool {
     let appearance = APP_STORE
         .get()
         .and_then(|store| store.app_setting("appearance"))
@@ -656,7 +656,12 @@ fn on_main_window_mapped(window: &WebviewWindow) {
         resolved_native_theme(window, &appearance),
         tauri::Theme::Dark
     );
-    if !platform::imp::apply_material(window, dark) {
+    platform::imp::apply_material(window, dark)
+}
+
+#[cfg(target_os = "windows")]
+fn on_main_window_mapped(window: &WebviewWindow) {
+    if !restore_window_material(window) {
         diagnostic!("material: main-window backdrop could not be restored after initial reveal");
     }
 }
@@ -2079,9 +2084,7 @@ pub(crate) fn emit_media_changed(app: &tauri::AppHandle, profile: &str, id: &str
         id: id.to_owned(),
         revision: revision.to_owned(),
     };
-    for label in [MAIN_LABEL, overlay::PANEL_LABEL] {
-        emit_to_privileged(app, label, "zephium:resource-changed", &event);
-    }
+    emit_to_privileged(app, MAIN_LABEL, "zephium:resource-changed", &event);
 }
 
 fn emit_to_privileged<T: Serialize>(app: &tauri::AppHandle, label: &str, event: &str, payload: &T) {
@@ -6783,9 +6786,7 @@ pub fn run() {
             let downloads_app = handle.clone();
             if !engine.initialize_downloads(store.clone(), move |profile| {
                 let event = DownloadsChanged { profile: profile.to_string() };
-                for label in [MAIN_LABEL, overlay::PANEL_LABEL] {
-                    emit_to_privileged(&downloads_app, label, "zephium:downloads-changed", &event);
-                }
+                emit_to_privileged(&downloads_app, MAIN_LABEL, "zephium:downloads-changed", &event);
             }) { return Err(std::io::Error::other("download service initialization was not admitted").into()); }
             let startup_engine = app.try_state::<StartupEngine>().ok_or_else(|| {
                 std::io::Error::other("startup engine cleanup owner is unavailable")
@@ -7415,6 +7416,7 @@ pub fn run() {
                     .into());
                 }
                 material::install(&panel_window, true);
+                overlay::fit_to_shapes(&panel_window);
             }
             #[cfg(target_os = "windows")]
             {
