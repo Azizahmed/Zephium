@@ -54,6 +54,8 @@ pub struct WebExtensionLoad {
     pub extension_id: String,
     pub root: std::path::PathBuf,
     pub permissions: Vec<String>,
+    /// Explicit original native-app grant bound to authenticated package provenance.
+    pub external_native_messaging: bool,
     pub match_patterns: Vec<String>,
     /// Set when the package changed since WebKit last ran it, so its
     /// background runs once and WebKit relearns what it listens for.

@@ -250,7 +250,9 @@ pub(super) fn stage(
             .unwrap_or_default();
         let report = prepare_package(&dir, &access)
             .map_err(|error| format!("The extension can't be prepared ({error})."))?;
-        let mut permissions = manifest.permissions();
+        let reviewed_permissions = manifest.permissions();
+        let publisher_verified = matches!(original, Original::Crx(_));
+        let mut permissions = reviewed_permissions.clone();
         permissions.extend(report.added_permissions);
         let revision = compat_revision(&access);
         let entry = Entry {
@@ -266,6 +268,8 @@ pub(super) fn stage(
             compat: revision,
             started: String::new(),
             permissions,
+            reviewed_permissions,
+            publisher_verified,
             hosts,
             icon: icon.clone(),
             held_update: None,

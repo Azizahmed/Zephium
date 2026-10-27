@@ -303,6 +303,7 @@ fn unchanged(loaded: &WebExtensionLoad, wanted: &WebExtensionLoad) -> bool {
         && loaded.extension_id == wanted.extension_id
         && loaded.root == wanted.root
         && loaded.permissions == wanted.permissions
+        && loaded.external_native_messaging == wanted.external_native_messaging
         && loaded.match_patterns == wanted.match_patterns
 }
 
@@ -317,6 +318,7 @@ mod tests {
             extension_id: "abcdefghijklmnopabcdefghijklmnop".into(),
             root: "/packages/a/1.0-rev".into(),
             permissions: vec!["storage".into()],
+            external_native_messaging: false,
             match_patterns: vec!["<all_urls>".into()],
             start_background: true,
         };
@@ -330,5 +332,10 @@ mod tests {
             ..settled.clone()
         };
         assert!(!unchanged(&loaded, &narrowed));
+        let authority_changed = WebExtensionLoad {
+            external_native_messaging: true,
+            ..settled
+        };
+        assert!(!unchanged(&loaded, &authority_changed));
     }
 }

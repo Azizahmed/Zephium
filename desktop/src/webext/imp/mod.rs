@@ -76,6 +76,11 @@ impl WebExtensions {
             extension_id: entry.id.clone(),
             root: self.packages(&entry.id).join(&entry.package),
             permissions: entry.permissions.clone(),
+            external_native_messaging:
+                zephium_webext::permissions::external_native_messaging_allowed(
+                    &entry.reviewed_permissions,
+                    entry.publisher_verified,
+                ),
             match_patterns: granted_sites(entry),
             start_background,
         }

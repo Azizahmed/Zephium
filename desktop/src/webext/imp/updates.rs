@@ -123,9 +123,9 @@ async fn update(
     let fresh = &pending.entry;
     let asks_more = |old: &Entry| {
         fresh
-            .permissions
+            .reviewed_permissions
             .iter()
-            .any(|name| !old.permissions.contains(name))
+            .any(|name| !old.reviewed_permissions.contains(name))
             || fresh.hosts.iter().any(|host| !old.hosts.contains(host))
     };
     if holders.iter().any(|(_, old)| asks_more(old)) {

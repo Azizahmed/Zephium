@@ -76,6 +76,12 @@ struct Entry {
     #[serde(default)]
     started: String,
     permissions: Vec<String>,
+    /// Original API permissions accepted in review, excluding compatibility transport.
+    #[serde(default)]
+    reviewed_permissions: Vec<String>,
+    /// CRX publisher possession was verified for this exact source package.
+    #[serde(default)]
+    publisher_verified: bool,
     hosts: Vec<String>,
     #[serde(default)]
     icon: Option<String>,

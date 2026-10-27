@@ -1,0 +1,5 @@
+[
+  {"load":"crates/zephium-webext-macos/fixtures/native-open","id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","compat":false,"reviewed_native_app":true},
+  {"native_open_admission":true},
+  {"erase":true}
+]
