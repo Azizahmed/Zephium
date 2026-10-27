@@ -56,17 +56,20 @@ const PEAK_DARK: f32 = 0.68;
 const PAUSED_SHARE: f32 = 0.45;
 const WHEEL_STOPS: usize = 12;
 
+/// Zephium's blues, sRGB: azure, sky, periwinkle and a cooler sky. The
+/// light travels through one family of colour, so it reads as the window's
+/// own light at work rather than a spectrum running round the page.
 const AURORA_LIGHT: [[f64; 3]; 4] = [
-    [86.0, 132.0, 240.0],
-    [142.0, 108.0, 236.0],
-    [226.0, 108.0, 152.0],
-    [232.0, 158.0, 68.0],
+    [58.0, 118.0, 238.0],
+    [86.0, 156.0, 250.0],
+    [112.0, 116.0, 238.0],
+    [64.0, 170.0, 244.0],
 ];
 const AURORA_DARK: [[f64; 3]; 4] = [
-    [124.0, 166.0, 255.0],
-    [176.0, 146.0, 255.0],
-    [255.0, 146.0, 186.0],
-    [255.0, 196.0, 120.0],
+    [104.0, 156.0, 255.0],
+    [138.0, 190.0, 255.0],
+    [150.0, 146.0, 255.0],
+    [110.0, 198.0, 255.0],
 ];
 
 struct Glow {
@@ -459,8 +462,8 @@ impl Glow {
         mask.SetEllipseRadius(v2(r, r)).ok()?;
         let stops = mask.ColorStops().ok()?;
         // Offset 1 is the corner's edge; inward is toward the centre.
-        for k in 0..=8 {
-            let at = k as f32 / 8.0;
+        for k in 0..=16 {
+            let at = k as f32 / 16.0;
             let alpha = band_alpha((1.0 - at) * RADIUS);
             stops
                 .Append(
@@ -479,8 +482,10 @@ impl Glow {
         stops: &windows::UI::Composition::CompositionColorGradientStopCollection,
         depth: f32,
     ) -> Option<()> {
+        // Enough stops that the falloff is a curve rather than a few
+        // straight ramps, which DWM shows as bands.
         let mut points = vec![0.0, LINE - 0.5, LINE + 0.5];
-        points.extend((1..=8).map(|k| LINE + 0.5 + (depth - LINE - 0.5) * k as f32 / 8.0));
+        points.extend((1..=20).map(|k| LINE + 0.5 + (depth - LINE - 0.5) * k as f32 / 20.0));
         for inside in points {
             stops
                 .Append(
