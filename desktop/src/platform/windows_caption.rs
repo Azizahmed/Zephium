@@ -454,13 +454,22 @@ unsafe fn layout(p: *mut State) {
             origin.x,
             origin.y,
             rect.right.max(1),
-            displacement.max(reveal_height),
+            height.max(reveal_height),
             SWP_NOACTIVATE | SWP_NOZORDER | SWP_NOOWNERZORDER,
         );
         let region = CreateRectRgn(0, 0, rect.right.max(1), reveal_height);
         let band = CreateRectRgn(left, 0, rect.right.max(1), displacement);
         let _ = CombineRgn(Some(region), Some(region), Some(band), RGN_OR);
         let _ = DeleteObject(band.into());
+        // Where the controls stand is theirs even while they are away.
+        let spot = CreateRectRgn(
+            (rect.right - controls_width).max(0),
+            0,
+            rect.right.max(1),
+            height,
+        );
+        let _ = CombineRgn(Some(region), Some(region), Some(spot), RGN_OR);
+        let _ = DeleteObject(spot.into());
         if SetWindowRgn((*p).edge, Some(region), false) == 0 {
             let _ = DeleteObject(region.into());
         }
@@ -658,19 +667,35 @@ unsafe fn pointer_moved_on(p: *mut State) -> bool {
     moved
 }
 /// Hovering the reveal edge asks for the caption after a short dwell. With the
-/// caption out, or the pointer on Maximize (the shell's Snap flyout opens from
-/// it), hovering holds it without waiting.
+/// caption out, the pointer where the controls stand, or on Maximize (the
+/// shell's Snap flyout opens from it), hovering brings it without waiting.
 unsafe fn hover_reveal(p: *mut State, hot: HWND) {
     if (*p).suppressed || (*p).changing_state || (*p).sizing || !pointer_moved_on(p) {
         return;
     }
-    if (*p).expanded || hot == (*p).buttons[1] {
+    if (*p).expanded || hot == (*p).buttons[1] || at_controls(p) {
         cancel_reveal(p);
         reveal(p);
     } else if !(*p).reveal_armed {
         (*p).reveal_armed = true;
         SetTimer(Some((*p).strip), REVEAL, REVEAL_DWELL_MS, None);
     }
+}
+/// Whether the pointer is where the controls stand when they are out.
+unsafe fn at_controls(p: *mut State) -> bool {
+    let mut edge = RECT::default();
+    if GetWindowRect((*p).edge, &mut edge).is_err() {
+        return false;
+    }
+    let (controls_width, height, _, _) = paint::dimensions(GetDpiForWindow((*p).owner).max(96));
+    let spot = RECT {
+        left: edge.right - controls_width,
+        top: edge.top,
+        right: edge.right,
+        bottom: edge.top + height,
+    };
+    let mut cursor = POINT::default();
+    GetCursorPos(&mut cursor).is_ok() && PtInRect(&spot, cursor).as_bool()
 }
 /// Where focus returns when the caption lets go of it.
 unsafe fn focus_target(p: *mut State) -> HWND {
