@@ -3328,7 +3328,7 @@
   "profiles_avatar_label": "{name} 的图片",
   "profiles_menu_label": "切换到 {name}",
   "account_welcome_title": "登录 Zephium",
-  "account_welcome_body": "同一个账户可用于 Zephium AI 和你的设备，并在同步功能推出后用于同步。不登录，Zephium 也可以完整使用。",
+  "account_welcome_body": "无需自备密钥即可使用 Zephium AI。其他功能在没有账户时同样可以正常使用。",
   "account_name_add": "添加你的名字",
   "account_avatar_add": "添加照片",
   "account_avatar_change": "更换照片",

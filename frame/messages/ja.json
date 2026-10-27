@@ -3328,7 +3328,7 @@
   "profiles_avatar_label": "{name} の画像",
   "profiles_menu_label": "{name} に切り替え",
   "account_welcome_title": "Zephium にサインイン",
-  "account_welcome_body": "Zephium AI とデバイス用の 1 つのアカウント。同期は利用可能になり次第使えます。Zephium はアカウントなしでも完全に使えます。",
+  "account_welcome_body": "ご自身のキーなしでZephium AIを使えます。そのほかの機能は、アカウントなしでも同じように使えます。",
   "account_name_add": "名前を追加",
   "account_avatar_add": "写真を追加",
   "account_avatar_change": "写真を変更",

@@ -3328,7 +3328,7 @@
   "profiles_avatar_label": "{name}의 사진",
   "profiles_menu_label": "{name} 프로필로 전환",
   "account_welcome_title": "Zephium에 로그인",
-  "account_welcome_body": "Zephium AI와 기기, 그리고 곧 제공될 동기화를 위한 하나의 계정이에요. 계정 없이도 Zephium을 모두 사용할 수 있어요.",
+  "account_welcome_body": "내 키 없이 Zephium AI를 사용할 수 있어요. 나머지 기능은 계정 없이도 똑같이 작동해요.",
   "account_name_add": "이름 추가",
   "account_avatar_add": "사진 추가",
   "account_avatar_change": "사진 변경",

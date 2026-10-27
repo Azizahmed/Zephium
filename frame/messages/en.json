@@ -3328,7 +3328,7 @@
   "profiles_avatar_label": "{name}’s picture",
   "profiles_menu_label": "Switch to {name}",
   "account_welcome_title": "Sign in to Zephium",
-  "account_welcome_body": "One account for Zephium AI and your devices, and for sync when it arrives. Zephium works fully without one.",
+  "account_welcome_body": "Use Zephium AI without keys of your own. Everything else works the same without an account.",
   "account_name_add": "Add your name",
   "account_avatar_add": "Add a photo",
   "account_avatar_change": "Change photo",

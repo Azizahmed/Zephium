@@ -3328,7 +3328,7 @@
   "profiles_avatar_label": "Изображение: {name}",
   "profiles_menu_label": "Переключиться на {name}",
   "account_welcome_title": "Войти в Zephium",
-  "account_welcome_body": "Одна учетная запись для Zephium AI и ваших устройств, а также для синхронизации, когда она появится. Zephium полностью работает и без учетной записи.",
+  "account_welcome_body": "Пользуйтесь Zephium AI без собственных ключей. Все остальное работает и без учетной записи.",
   "account_name_add": "Добавьте имя",
   "account_avatar_add": "Добавить фото",
   "account_avatar_change": "Изменить фото",
