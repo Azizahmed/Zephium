@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { layout, WINDOWS_CAPTION } from "../lib/layout";
+import { layout } from "../lib/layout";
 
 const FULL = { controls: [32, 32], clock: true };
 
@@ -43,14 +43,23 @@ describe("layout", () => {
   });
 });
 
-it("removes the wordmark's height and clock gap while retaining the caption reserve", () => {
-  const normal = layout(1200, 800, { ...FULL, caption: WINDOWS_CAPTION });
-  const hidden = layout(1200, 800, { ...FULL, wordmark: false, caption: WINDOWS_CAPTION });
+it("removes the wordmark's height and clock gap and leaves the controls where they were", () => {
+  const normal = layout(1200, 800, FULL);
+  const hidden = layout(1200, 800, { ...FULL, wordmark: false });
   expect(hidden.mark.h).toBe(0);
   expect(hidden.when).toBe(hidden.mark.y);
   expect(hidden.when).toBeLessThan(normal.when!);
   expect(hidden.controls).toEqual(normal.controls);
   expect(hidden.notch).toEqual(normal.notch);
-  expect(WINDOWS_CAPTION).toBe(138);
   expect(layout(1200, 800, { ...FULL, wordmark: false, clock: false }).when).toBeNull();
+});
+
+it("mirrors the controls into the start corner, the last still nearest it", () => {
+  const end = layout(1200, 800, FULL);
+  const start = layout(1200, 800, { ...FULL, corner: "start" });
+  expect(start.controls.map((box) => box.x)).toEqual(
+    end.controls.map((box) => 1200 - box.x - box.w),
+  );
+  expect(start.controls.at(-1)!.x).toBe(14);
+  expect(start.notch).toEqual(end.notch);
 });

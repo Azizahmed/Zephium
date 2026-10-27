@@ -10,11 +10,14 @@
     account,
     onaccount,
     signInWidth = $bindable(0),
+    corner = "end",
   }: {
     account: ReturnType<typeof accountFoot>;
     onaccount: (intent: "account" | "credits") => void;
     /** How wide the words of the signed-out button are, for the pane around them. */
     signInWidth?: number;
+    /** The corner it stands in, which its menu opens out of. */
+    corner?: "start" | "end";
   } = $props();
 
   // The ring is a warning, not decoration: it is drawn only once the
@@ -49,7 +52,7 @@
     label={m.account_menu()}
     triggerTitle={tip}
     menu
-    align="end"
+    align={corner}
     triggerClass="ntp-account"
     panelClass="ntp-account-panel"
   >

@@ -8,7 +8,7 @@ export type Layout = {
   /** The field's notch, narrowed so both top corners stay free. */
   notch: Notch;
   /** The page's controls, each in its own round pane (a capsule when it
-   *  holds words), in the top corner beside the notch and level with the
+   *  holds words), in a top corner beside the notch and level with the
    *  field, the last nearest the corner. */
   controls: Box[];
   /** Where the sky meets the page. */
@@ -25,9 +25,6 @@ const CORNER = 110;
 const CONTROL = { size: 32, gap: 6, inset: 14 };
 /** What two round controls take from the corner, which CORNER was set for. */
 const TWO_ROUND = CONTROL.inset + 2 * CONTROL.size + CONTROL.gap;
-/** Windows' own caption, which comes out over the window's top-right
- *  corner: three 44px buttons and their padding (windows_caption_paint.rs). */
-export const WINDOWS_CAPTION = 138;
 /** The line with the time and the date, and its distance under the name. */
 const WHEN = { gap: 16, height: 20 };
 
@@ -40,29 +37,29 @@ export function layout(
   {
     controls,
     clock,
-    caption = 0,
+    corner: side = "end",
     wordmark = true,
-  }: { controls: readonly number[]; clock: boolean; caption?: number; wordmark?: boolean },
+  }: {
+    controls: readonly number[];
+    clock: boolean;
+    corner?: "start" | "end";
+    wordmark?: boolean;
+  },
 ): Layout {
   // Both top corners stay clear of the notch's flare for the controls in
   // one of them, so the field stays in the middle however wide they are.
-  // A window caption over the corner keeps its own room there, the controls
-  // beside it.
-  const reach = controls.reduce(
-    (sum, w) => sum + w + CONTROL.gap,
-    CONTROL.inset + caption - CONTROL.gap,
-  );
+  const reach = controls.reduce((sum, w) => sum + w + CONTROL.gap, CONTROL.inset - CONTROL.gap);
   const corner = Math.max(CORNER, reach + CORNER - TWO_ROUND);
   const notch = { ...NOTCH, width: Math.min(NOTCH.width, width - 2 * corner) };
 
   const buttonY = Math.round((NOTCH.height - CONTROL.size) / 2);
-  let right = width - CONTROL.inset - caption;
+  let edge = side === "end" ? width - CONTROL.inset : CONTROL.inset;
   const buttons = controls
     .toReversed()
     .map((w) => {
-      const box = { x: right - w, y: buttonY, w, h: CONTROL.size };
-      right = box.x - CONTROL.gap;
-      return box;
+      const x = side === "end" ? edge - w : edge;
+      edge = side === "end" ? x - CONTROL.gap : x + w + CONTROL.gap;
+      return { x, y: buttonY, w, h: CONTROL.size };
     })
     .toReversed();
 

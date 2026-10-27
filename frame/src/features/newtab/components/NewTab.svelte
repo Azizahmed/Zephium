@@ -21,7 +21,7 @@
   import { readSystemClock, systemHour24 } from "../lib/system-clock.svelte";
   import { focus, localDay } from "$domain/time";
   import { groundPath, notchShape, notchWidth } from "../lib/ground";
-  import { layout, WINDOWS_CAPTION, type Box } from "../lib/layout";
+  import { layout, type Box } from "../lib/layout";
   import { IS_WINDOWS } from "$shared/platform";
   import { WORDMARK } from "$shared/lib/wordmark";
   import { reducedMotion } from "$shared/lib/motion";
@@ -181,12 +181,16 @@
     ...(showAccount ? [account.signedIn ? 32 : Math.max(32, signInWidth)] : []),
     ...(oncustomize ? [32] : []),
   ]);
+  // Windows' own caption comes out over the top-right corner, so there the
+  // page keeps its controls in the other, as macOS keeps the window's lights
+  // in the left.
+  const corner = IS_WINDOWS ? "start" : "end";
   let page = $derived(
     layout(width, height, {
       controls,
       clock: showClock,
       wordmark: showWordmark,
-      caption: IS_WINDOWS ? WINDOWS_CAPTION : 0,
+      corner,
     }),
   );
   const at = ({ x, y, w, h }: Box) => `left:${x}px;top:${y}px;width:${w}px;height:${h}px`;
@@ -434,7 +438,7 @@
   <!-- Each control a disc of light on the sky, level with the field. -->
   {#if showAccount && onaccount && page.controls[0]}
     <div class="control" style={at(page.controls[0])}>
-      <NewTabAccount {account} {onaccount} bind:signInWidth />
+      <NewTabAccount {account} {onaccount} {corner} bind:signInWidth />
     </div>
   {/if}
   {#if oncustomize && page.controls.at(-1)}
