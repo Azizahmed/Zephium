@@ -86,17 +86,26 @@ export type DeletionResult =
 
 // Native permits one foreground deletion; leave room for its bounded recovered cohort.
 const MAX_PENDING_DELETIONS = 64;
-const pendingDeletions = new SvelteMap<string, { stop: () => void }>();
+const pendingDeletions = new SvelteMap<string, { profile: string; stop: () => void }>();
+const completedDeletions = new SvelteMap<string, string>();
 
 function finishDraftDeletion(operationId: string) {
   const pending = pendingDeletions.get(operationId);
   pendingDeletions.delete(operationId);
-  pending?.stop();
+  if (pending) {
+    completedDeletions.set(operationId, pending.profile);
+    while (completedDeletions.size > MAX_PENDING_DELETIONS) {
+      const oldest = completedDeletions.keys().next().value;
+      if (oldest !== undefined) completedDeletions.delete(oldest);
+    }
+    pending.stop();
+  }
 }
 
 function observeDeletion(profile: string, operationId: string) {
   if (pendingDeletions.has(operationId)) return;
-  const pending = { stop: () => {} };
+  completedDeletions.delete(operationId);
+  const pending = { profile, stop: () => {} };
   pendingDeletions.set(operationId, pending);
   const stop = operations.onDisposition(operationId, (disposition) => {
     if (
@@ -115,6 +124,12 @@ function observeDeletion(profile: string, operationId: string) {
 
 /** Rechecks the same admitted deletion when its drain or erasure is still pending. */
 export const remove = async (id: string, operationId?: string): Promise<DeletionResult> => {
+  if (
+    operationId &&
+    (pendingDeletions.get(operationId)?.profile ?? completedDeletions.get(operationId)) !== id
+  ) {
+    return { state: "failed" };
+  }
   if (!operationId && pendingDeletions.size >= MAX_PENDING_DELETIONS) return { state: "failed" };
   const result: Settlement = operationId
     ? await operations.waitForDisposition(operationId, 5000).then((reply): Settlement =>

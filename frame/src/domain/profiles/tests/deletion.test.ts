@@ -103,3 +103,45 @@ it("releases a rejected pending deletion without erasing drafts", async () => {
   });
   expect(mocks.forgetDrafts).not.toHaveBeenCalled();
 });
+
+it("rejects a retry bound to another profile before observing or erasing anything", async () => {
+  const operation_id = "0000000000000101";
+  mocks.settle.mockResolvedValue({ outcome: "failed", reason: "unresolved", operation_id });
+  await remove("owner-profile");
+  mocks.waitForDisposition.mockResolvedValue({
+    state: "processed",
+    disposition: { operation_id, outcome: "applied" },
+  });
+  await expect(remove("other-profile", operation_id)).resolves.toEqual({ state: "failed" });
+  expect(mocks.waitForDisposition).not.toHaveBeenCalled();
+  expect(mocks.forgetDrafts).not.toHaveBeenCalled();
+  mocks.onDisposition.mock.calls.at(-1)?.[1]({ operation_id, outcome: "applied" });
+  expect(mocks.forgetDrafts).toHaveBeenCalledExactlyOnceWith("owner-profile");
+});
+
+it("retains the originating profile after completion and rejects mismatched retries", async () => {
+  const operation_id = "0000000000000102";
+  mocks.settle.mockResolvedValue({ outcome: "failed", reason: "unresolved", operation_id });
+  await remove("completed-profile");
+  mocks.onDisposition.mock.calls.at(-1)?.[1]({ operation_id, outcome: "applied" });
+  mocks.forgetDrafts.mockClear();
+  mocks.waitForDisposition.mockResolvedValue({
+    state: "processed",
+    disposition: { operation_id, outcome: "applied" },
+  });
+  await expect(remove("other-profile", operation_id)).resolves.toEqual({ state: "failed" });
+  expect(mocks.waitForDisposition).not.toHaveBeenCalled();
+  expect(mocks.forgetDrafts).not.toHaveBeenCalled();
+  await expect(remove("completed-profile", operation_id)).resolves.toEqual({ state: "completed" });
+  expect(mocks.forgetDrafts).toHaveBeenCalledExactlyOnceWith("completed-profile");
+});
+
+it("rejects an unknown retry identity without using its supplied profile", async () => {
+  mocks.waitForDisposition.mockResolvedValue({
+    state: "processed",
+    disposition: { operation_id: "0000000000000103", outcome: "applied" },
+  });
+  await expect(remove("other-profile", "0000000000000103")).resolves.toEqual({ state: "failed" });
+  expect(mocks.waitForDisposition).not.toHaveBeenCalled();
+  expect(mocks.forgetDrafts).not.toHaveBeenCalled();
+});
