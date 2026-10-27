@@ -304,14 +304,17 @@ jobs:
     name: Windows (x64)
     needs: gate
     runs-on: windows-latest
-    timeout-minutes: 75
+    timeout-minutes: 300
     permissions:
       contents: read
+      actions: read
     defaults:
       run:
         shell: bash
     env:
       VERSION: ${{ needs.gate.outputs.version }}
+      SIGNPATH_POLICY: release-signing
+      SIGNPATH_CERT_THUMBPRINT: ${{ vars.SIGNPATH_RELEASE_CERT_THUMBPRINT }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -334,21 +337,60 @@ jobs:
           python3 scripts/release/third_party_notices.py target/THIRD_PARTY_NOTICES.txt \
             || python scripts/release/third_party_notices.py target/THIRD_PARTY_NOTICES.txt
 
+      - name: Require production signing configuration
+        shell: pwsh
+        env:
+          SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}
+        run: |
+          if (!$env:SIGNPATH_API_TOKEN) { throw 'Missing SIGNPATH_API_TOKEN secret' }
+          if ($env:SIGNPATH_CERT_THUMBPRINT -notmatch '^[A-Fa-f0-9]{40}$') { throw 'Production certificate is not configured; never fall back to unsigned or test-signed releases' }
+
       - name: Build
         working-directory: desktop
         env:
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           # The release profile strips symbols, which on MSVC also drops the
           # PDB. MSVC keeps debug info in the PDB, never in the .exe.
           CARGO_PROFILE_RELEASE_DEBUG: line-tables-only
           CARGO_PROFILE_RELEASE_STRIP: none
-        run: pnpm tauri build --bundles nsis --config "${RELEASE_CONFIG}"
+        run: pnpm tauri build --no-bundle -- --locked
 
-      # Authenticode signing (SignPath) goes here. It changes the installer's
-      # bytes, so it must run before the updater signature is made: sign the
-      # installer, then replace Tauri's .sig with
-      # `pnpm tauri signer sign <signed installer>` before staging.
+      - name: Start packaging with the signing hook
+        shell: pwsh
+        run: ./scripts/release/signpath.ps1 -Operation Start
+      - name: Sign packaged browser executable
+        uses: ./.github/actions/signpath-sign
+        with:
+          role: app
+          policy: release-signing
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+      - name: Sign generated uninstaller
+        uses: ./.github/actions/signpath-sign
+        with:
+          role: uninstaller
+          policy: release-signing
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+      - name: Sign final installer
+        uses: ./.github/actions/signpath-sign
+        with:
+          role: installer
+          policy: release-signing
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+      - name: Verify all publisher signatures and packaging
+        shell: pwsh
+        run: ./scripts/release/signpath.ps1 -Operation Finish
+      - name: Verify installed signatures and uninstallation
+        shell: pwsh
+        run: ./scripts/release/signpath.ps1 -Operation Smoke
+
+      # When integrating fix/security-boundaries, retain its unconditional
+      # "Sign the final Windows bytes for the updater" step AFTER this generic
+      # re-sign step and BEFORE staging. Never overwrite its bound signature.
+      - name: Regenerate updater signature after Authenticode signing
+        working-directory: desktop
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: pnpm tauri signer sign "../target/release/bundle/nsis/Zephium_${VERSION}_x64-setup.exe"
 
       - name: Stage release assets
         run: |
@@ -371,6 +413,11 @@ jobs:
           path: target/release/*.pdb
           if-no-files-found: error
           retention-days: 90
+
+      - name: Stop packaging and clean up signing session
+        if: always()
+        shell: pwsh
+        run: ./scripts/release/signpath.ps1 -Operation Cleanup
 
   publish:
     name: Draft release
@@ -461,7 +508,7 @@ jobs:
           - macOS (Apple Silicon): [Zephium-macOS-arm64.dmg](https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/Zephium-macOS-arm64.dmg)
           - Windows (x64): [Zephium-Windows-x64-setup.exe](https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/Zephium-Windows-x64-setup.exe)
 
-          Installed copies update themselves. The Windows installer is not yet Authenticode-signed, so SmartScreen may ask for confirmation.
+          Installed copies update themselves. The Windows installer, browser executable and uninstaller are Authenticode-signed. SmartScreen reputation may still affect new downloads.
 
           Verify a download with \`SHA256SUMS\` or \`gh attestation verify <file> --repo ${GITHUB_REPOSITORY}\`.
           EOF

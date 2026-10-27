@@ -134,13 +134,19 @@ Download them for any release you need to symbolicate later.
 
 ## Windows signing
 
-The Windows installer is not Authenticode-signed yet, so SmartScreen warns on
-first run. When SignPath is added, signing goes in the marked spot in the
-Windows job and must come **before** the updater signature: Authenticode
-changes the installer's bytes, so sign it first, then replace Tauri's `.sig`
-by running `pnpm tauri signer sign` over the signed file.
+The SignPath integration is awaiting test signing and production certificate
+issuance. Do not enable this release workflow on the default branch until the
+qualification checklist in [Windows signing setup](../signpath/README.md) is
+complete. Existing public releases remain unsigned.
 
-Until then, SmartScreen judges each installer by its own download reputation.
+The Windows job signs the packaged browser, generated uninstaller, and final
+installer in that order. Each production request requires approval in SignPath.
+Missing credentials, a missing certificate pin, or failed signature checks stop
+the job; there is no unsigned fallback. Updater signing runs **after** all
+Authenticode changes. Preserve the security workstream's version-bound updater
+signature as the last signature step when integrating both changes.
+
+SmartScreen reputation can still affect newly signed downloads.
 After publishing, submit `Zephium-Windows-x64-setup.exe` at
 <https://www.microsoft.com/wdsi/filesubmission> as a software developer
 ("Incorrectly detected as malware/malicious" when it is flagged). Keep the
