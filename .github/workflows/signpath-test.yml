@@ -47,6 +47,9 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           shared-key: signpath-test-windows
+          # Keep dependency compilation when a later signing/packaging test fails.
+          # This cache is scoped separately from production release builds.
+          cache-on-failure: true
       - run: pnpm install --frozen-lockfile
       - name: Read version and create notices
         shell: pwsh
@@ -97,8 +100,11 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
           $setup = "target/release/bundle/nsis/Zephium_$($env:VERSION)_x64-setup.exe"
-          pnpm --dir desktop tauri signer sign "../$setup"
-          if ($LASTEXITCODE -ne 0) { throw 'Updater signing failed' }
+          Push-Location desktop
+          try {
+            pnpm exec tauri signer sign "../$setup"
+            if ($LASTEXITCODE -ne 0) { throw 'Updater signing failed' }
+          } finally { Pop-Location }
           New-Item -ItemType Directory dist | Out-Null
           Copy-Item $setup dist/Zephium-Windows-x64-setup.exe
           Copy-Item "$setup.sig" dist/Zephium-Windows-x64-setup.exe.sig

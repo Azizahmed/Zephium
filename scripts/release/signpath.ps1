@@ -107,8 +107,8 @@ $installer = Join-Path $root "target/release/bundle/nsis/Zephium_$($config.versi
 try {
     switch ($Operation) {
         'Worker' {
-            Set-Location $root
-            & pnpm.cmd --dir desktop tauri bundle --bundles nsis --config "$State/bundle.json"
+            Set-Location (Join-Path $root 'desktop')
+            & pnpm.cmd exec tauri bundle --bundles nsis --config "$State/bundle.json"
             $result = $LASTEXITCODE
             if ($result -ne 0) { throw "Tauri bundler failed ($result)" }
             Write-Atomic "$State/worker-exit.json" '{"exitCode":0}'
