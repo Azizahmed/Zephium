@@ -25,6 +25,7 @@ use super::{Access, Entry, Original, Registry, WebExtensionView, WebExtensions};
 // Publication, registry joins and pruning share one process-wide lease,
 // including the background update coordinator's WebExtensions instance.
 static PUBLICATION: std::sync::Mutex<()> = std::sync::Mutex::new(());
+static DEFER_PRUNE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 const MAX_PACKAGE_BYTES: u64 = 128 * 1024 * 1024;
 
@@ -101,6 +102,9 @@ impl WebExtensions {
             let Ok(_publication) = PUBLICATION.lock() else {
                 return;
             };
+            if DEFER_PRUNE.load(std::sync::atomic::Ordering::Relaxed) {
+                return;
+            }
             let extensions = WebExtensions {
                 root,
                 state: std::sync::Mutex::new(None),
@@ -134,6 +138,14 @@ impl WebExtensions {
         let Ok(_publication) = PUBLICATION.lock() else {
             return;
         };
+        let loads = self.native_loads(profile, registry);
+        shell.dispatch(zephium_app::Command::SetWebExtensions {
+            profile,
+            extensions: loads,
+        });
+    }
+
+    fn native_loads(&self, profile: ProfileId, registry: &mut Registry) -> Vec<WebExtensionLoad> {
         *registry = self.apply_registry(profile, registry);
         let mut changed = false;
         let mut loads = Vec::new();
@@ -171,13 +183,12 @@ impl WebExtensions {
             }
             loads.push(self.load(entry, install, start_background));
         }
-        if changed {
-            let _ = self.save(profile, registry);
+        if changed && self.save(profile, registry).is_err() {
+            eprintln!("extensions: could not commit prepared packages; cache cleanup deferred");
+            // Ready trees may be serving native views without a durable registry reference.
+            DEFER_PRUNE.store(true, std::sync::atomic::Ordering::Relaxed);
         }
-        shell.dispatch(zephium_app::Command::SetWebExtensions {
-            profile,
-            extensions: loads,
-        });
+        loads
     }
 
     fn rebuild(&self, entry: &mut Entry, revision: &str) -> Result<(), String> {

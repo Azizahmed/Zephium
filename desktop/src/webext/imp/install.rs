@@ -835,6 +835,51 @@ mod tests {
     }
 
     #[test]
+    fn registry_save_failure_keeps_ready_extensions_loading() {
+        let root = tempfile::tempdir().unwrap();
+        let extensions = WebExtensions {
+            root: root.path().to_path_buf(),
+            state: Default::default(),
+        };
+        let profile = ProfileId::from(1);
+        let mut entries = Vec::new();
+        for bytes in [
+            include_bytes!("../../../tests/fixtures/webext-native.crx").as_slice(),
+            include_bytes!("../../../tests/fixtures/webext-native-app.crx").as_slice(),
+        ] {
+            let verified = crx::verify(bytes, None).unwrap();
+            let staged = stage(
+                root.path(),
+                Source::Store(verified.id, bytes.to_vec()),
+                profile,
+                &[],
+            )
+            .unwrap();
+            publish(
+                &extensions.packages(&staged.pending.entry.id),
+                &staged.pending,
+            )
+            .unwrap();
+            entries.push(staged.pending.entry);
+        }
+        entries[0].started = entries[0].compat.clone();
+        entries[1].compat.clear();
+        let mut registry = crate::webext::Registry {
+            extensions: entries,
+        };
+        extensions.save(profile, &registry).unwrap();
+        std::fs::create_dir(extensions.registry_path(profile).with_extension("json.tmp")).unwrap();
+        let loads = extensions.native_loads(profile, &mut registry);
+        assert_eq!(
+            loads.len(),
+            2,
+            "both unchanged and successfully rebuilt packages remain usable"
+        );
+        assert!(!loads[0].start_background);
+        assert!(loads[1].start_background);
+    }
+
+    #[test]
     fn folder_confirmation_uses_the_frozen_reviewed_original() {
         let root = tempfile::tempdir().unwrap();
         let source = root.path().join("developer");
