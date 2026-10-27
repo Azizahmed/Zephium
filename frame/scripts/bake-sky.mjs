@@ -15,6 +15,7 @@ const source = (name) =>
   fileURLToPath(new URL(`../../assets/sky/${name}-source.png`, import.meta.url));
 const out = (name) =>
   fileURLToPath(new URL(`../src/shared/sky/assets/sky-${name}.avif`, import.meta.url));
+const edgeOut = fileURLToPath(new URL("../src/shared/sky/assets/edge-light.json", import.meta.url));
 const frostOut = (name) =>
   fileURLToPath(new URL(`../src/shared/sky/assets/frost-${name}.png`, import.meta.url));
 
@@ -41,6 +42,28 @@ const SCENES = [
   { name: "day", paper: [247, 247, 248], follow: -1.8, veil: [255, 255, 255, 0.25] },
   { name: "night", paper: [26, 29, 37], follow: 1.1, veil: [5, 8, 20, 0.3] },
 ];
+
+/** How much of the picture's width, from its left edge, the light beside
+ *  the page is read from, and in how many bands down its height. */
+const EDGE_SHARE = 0.06;
+const EDGE_BANDS = 32;
+
+/** The light the picture gives off at its left edge, band by band down its
+ *  height: what the glass beside the page catches of it. */
+function edgeLight(pixels, width, height) {
+  const reach = Math.round(width * EDGE_SHARE);
+  return Array.from({ length: EDGE_BANDS }, (_, band) => {
+    const top = Math.floor((band * height) / EDGE_BANDS);
+    const bottom = Math.floor(((band + 1) * height) / EDGE_BANDS);
+    const sum = [0, 0, 0];
+    for (let y = top; y < bottom; y++)
+      for (let x = 0; x < reach; x++)
+        for (let channel = 0; channel < 3; channel++)
+          sum[channel] += pixels[(y * width + x) * 3 + channel];
+    const count = (bottom - top) * reach;
+    return sum.map((total) => Math.round(total / count));
+  });
+}
 
 /** A separable Gaussian over an RGB float image, clamped at its edges. */
 function blur(pixels, width, height, sigma) {
@@ -266,7 +289,10 @@ function bake({ name, paper, follow, veil }) {
     { stdio: ["ignore", "ignore", "inherit"] },
   );
   frost(name, raw, width, height, veil);
+  edges[name] = edgeLight(baked, width, height);
   rmSync(scratch, { recursive: true });
 }
 
+const edges = {};
 for (const scene of SCENES) bake(scene);
+writeFileSync(edgeOut, `${JSON.stringify(edges)}\n`);

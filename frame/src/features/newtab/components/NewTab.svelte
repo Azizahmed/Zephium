@@ -27,6 +27,7 @@
     decode,
     FROSTS,
     placeSky,
+    placeSkyInWindow,
     SCENES,
     scene as skyScene,
     seen,
@@ -186,6 +187,23 @@
   // page is cut by the notch the field hangs in, so the window's own glass
   // reaches down into it around the field.
   let sky = $derived(placeSky(width, page.horizon));
+  // The glass beside the page is lit from the picture's left edge, so it is
+  // told where the picture lies in the window whenever either moves.
+  let section = $state<HTMLElement>();
+  $effect(() => {
+    const { y, h } = sky;
+    const pageHeight = height;
+    void width;
+    if (!section || h <= 0) return;
+    // Laid out rather than as drawn: the page may be mid-flight in a push.
+    let left = 0;
+    let top = 0;
+    for (let at: HTMLElement | null = section; at; at = at.offsetParent as HTMLElement | null) {
+      left += at.offsetLeft;
+      top += at.offsetTop;
+    }
+    placeSkyInWindow({ left, top, height: pageHeight, y, h });
+  });
   const id = $props.id();
   let ground = $derived(groundPath(width, height, page.notch));
   let lip = $derived(notchShape(width, height, page.notch));
@@ -264,6 +282,7 @@
   baked into the picture, so the page only shows it.
 -->
 <section
+  bind:this={section}
   class="newtab"
   class:arriving
   class:entering={!arriving}
@@ -438,6 +457,9 @@
     --sky-card: var(--sky-day-card);
     --sky-card-rim: var(--sky-day-card-rim);
     --sky-card-edge: var(--sky-day-card-edge);
+    --sky-edge: var(--sky-day-edge);
+    --sky-edge-half: var(--sky-day-edge-half);
+    --sky-edge-faint: var(--sky-day-edge-faint);
 
     position: relative;
     block-size: 100%;
@@ -456,6 +478,9 @@
     --sky-card: var(--sky-night-card);
     --sky-card-rim: var(--sky-night-card-rim);
     --sky-card-edge: var(--sky-night-card-edge);
+    --sky-edge: var(--sky-night-edge);
+    --sky-edge-half: var(--sky-night-edge-half);
+    --sky-edge-faint: var(--sky-night-edge-faint);
   }
 
   :global(:root:not([data-material="none"])[data-material]) .newtab {
@@ -470,6 +495,27 @@
 
   .page {
     background: var(--sky-paper);
+  }
+
+  /* The picture eases off at the page's sides rather than ending at them,
+     so a bright cloud sinks into the edge instead of meeting whatever the
+     window's glass is showing beside it. */
+  .page::after {
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(
+      to right,
+      var(--sky-edge) 0,
+      var(--sky-edge-half) 2.5%,
+      var(--sky-edge-faint) 5.5%,
+      transparent 9%,
+      transparent 91%,
+      var(--sky-edge-faint) 94.5%,
+      var(--sky-edge-half) 97.5%,
+      var(--sky-edge) 100%
+    );
+    content: "";
+    pointer-events: none;
   }
 
   .sky {
@@ -820,7 +866,8 @@
     }
   }
 
-  :global(:root[data-reduce-motion="true"]) :is(.figure, .entering .page, .entering .mark, .entering .greeting, .entering .when) {
+  :global(:root[data-reduce-motion="true"])
+    :is(.figure, .entering .page, .entering .mark, .entering .greeting, .entering .when) {
     animation: none;
   }
 
