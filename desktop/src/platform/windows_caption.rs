@@ -29,9 +29,12 @@ const WATCH_MS: u32 = 50;
 // With another window in front there is nothing to read, only a moment to
 // notice this one has come back.
 const WAITING_MS: u32 = 250;
-// How far down from the window's top the pointer asks for the caption: the
-// gutter and a little of the page, not a page's own top bar.
+// How far down from the window's top the pointer asks for the caption over a
+// page: the gutter and a little of the page, not a page's own top bar.
 const TOP_REACH: f64 = 20.0;
+// How long the pointer must stay there: going for a page's own top bar
+// passes through without the caption coming out over it.
+const TOP_DWELL_MS: u32 = 400;
 // The pointer must rest on the reveal edge this long before the caption
 // slides in, so passing over it on the way elsewhere reveals nothing.
 const REVEAL_DWELL_MS: u32 = 150;
@@ -79,8 +82,6 @@ struct State {
     surface: Option<paint::Surface>,
     geometry: Option<(i32, i32, i32, i32, i32, u32)>,
     render_failed: bool,
-    // The sidebar's toolbar is hovered: the caption comes out and stays.
-    held: bool,
     // The pointer was near the window's top at the last reading.
     near_top: bool,
     watch_ms: u32,
@@ -188,7 +189,6 @@ pub fn install(window: &WebviewWindow) -> bool {
             surface: Some(surface),
             geometry: None,
             render_failed: false,
-            held: false,
             near_top: false,
             watch_ms: WATCH_MS,
         }));
@@ -210,26 +210,6 @@ pub fn install(window: &WebviewWindow) -> bool {
         layout(pointer);
         SetTimer(Some(strip), WATCH, WATCH_MS, None);
         true
-    }
-}
-/// Brings the caption out and keeps it while the sidebar's toolbar is
-/// hovered, or lets it go as it would any hover. Runs on the UI thread.
-pub fn set_held(window: &WebviewWindow, held: bool) {
-    // SAFETY: see `state_of`.
-    unsafe {
-        let Some(p) = state_of(window) else {
-            return;
-        };
-        if (*p).held == held {
-            return;
-        }
-        (*p).held = held;
-        if held {
-            cancel_reveal(p);
-            reveal(p);
-        } else {
-            SetTimer(Some((*p).strip), HIDE, 450, None);
-        }
     }
 }
 /// The live state of a window's caption, found through its subclass. Runs on
@@ -723,7 +703,9 @@ unsafe fn hover_reveal(p: *mut State, hot: HWND) {
 unsafe fn in_front(owner: HWND) -> bool {
     GetAncestor(GetForegroundWindow(), GA_ROOTOWNER) == owner
 }
-/// Whether the pointer is over the window, in front, within reach of its top.
+/// Whether the pointer is over a web page, in front, within reach of the
+/// window's top. The sidebar and Zephium's own pages are left alone: their
+/// controls are there to be used, not reached past.
 unsafe fn near_top(p: *mut State) -> bool {
     let owner = (*p).owner;
     if !in_front(owner) {
@@ -739,8 +721,12 @@ unsafe fn near_top(p: *mut State) -> bool {
     if !ScreenToClient(owner, &mut at).as_bool() || GetClientRect(owner, &mut client).is_err() {
         return false;
     }
-    let reach = (TOP_REACH * GetDpiForWindow(owner).max(96) as f64 / 96.0).round() as i32;
-    at.y >= 0 && at.y < reach && at.x >= 0 && at.x < client.right
+    let Some(page_left) = (*p).page_left else {
+        return false;
+    };
+    let scale = GetDpiForWindow(owner).max(96) as f64 / 96.0;
+    let reach = (TOP_REACH * scale).round() as i32;
+    at.y >= 0 && at.y < reach && at.x >= (page_left * scale).round() as i32 && at.x < client.right
 }
 /// Whether the pointer is where the controls stand when they are out.
 unsafe fn at_controls(p: *mut State) -> bool {
@@ -1337,7 +1323,15 @@ unsafe extern "system" fn strip_proc(
         WM_TIMER if w.0 == WATCH => {
             let near = near_top(p);
             if near && !(*p).expanded {
-                hover_reveal(p, HWND::default());
+                if !(*p).suppressed
+                    && !(*p).changing_state
+                    && !(*p).sizing
+                    && !(*p).reveal_armed
+                    && pointer_moved_on(p)
+                {
+                    (*p).reveal_armed = true;
+                    SetTimer(Some(hwnd), REVEAL, TOP_DWELL_MS, None);
+                }
             } else if !near && (*p).near_top {
                 cancel_reveal(p);
                 SetTimer(Some(hwnd), HIDE, 450, None);
@@ -1381,7 +1375,6 @@ unsafe extern "system" fn strip_proc(
             // dismissal. No polling timer runs while a gesture owns the band.
             if (*p).sizing
                 || (*p).menu_open
-                || (*p).held
                 || near_top(p)
                 || !(*p).pressed_button.0.is_null()
                 || (*p).drag_start.is_some()

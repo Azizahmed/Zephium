@@ -1827,7 +1827,6 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             sidebar_set_width,
             sidebar_set_hidden,
             sidebar_peek,
-            window_caption_hold,
             sidebar_resize,
             sidebar_resize_guide,
             tab_drag_over,
@@ -5378,20 +5377,6 @@ fn sidebar_peek(
     #[cfg(not(target_os = "macos"))]
     let _ = lights;
     shell.dispatch(Command::PeekSidebar { peek, slide });
-}
-
-/// Brings a window's own caption out and keeps it while the sidebar's
-/// toolbar is hovered, on a platform whose caption waits out of sight.
-#[tauri::command]
-#[specta::specta]
-fn window_caption_hold(caller: WebviewWindow, held: bool) {
-    if !authorize(&caller, CallerPolicy::Main, "window_caption_hold") {
-        return;
-    }
-    #[cfg(target_os = "windows")]
-    platform::imp::caption_held(&caller, held);
-    #[cfg(not(target_os = "windows"))]
-    let _ = held;
 }
 
 #[tauri::command]

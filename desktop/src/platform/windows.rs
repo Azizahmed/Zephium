@@ -641,12 +641,6 @@ thread_local! {
 
 /// The sidebar is hidden or back: the pointer is read for its left edge
 /// while it is away.
-/// Holds the caption out while the sidebar's toolbar is hovered.
-pub fn caption_held(window: &WebviewWindow, held: bool) {
-    let owner = window.clone();
-    let _ = window.run_on_main_thread(move || caption::set_held(&owner, held));
-}
-
 pub fn sidebar_hidden(window: &WebviewWindow, hidden: bool) {
     let owner = window.clone();
     let _ = window.run_on_main_thread(move || {
