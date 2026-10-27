@@ -119,8 +119,18 @@ class ReleaseWorkflowTests(unittest.TestCase):
             ('v1.0.0', 0, None, 1, None),
             ('v1.0.0', 200, 'garbage', 0, None),
             ('v1.0.0', 200, 'v01.0.0', 0, None),
-            ('v1.0.0', 200, 'v1.0.0-beta.1', 0, None),
+            ('v1.0.0', 200, 'v1.0.0-beta.1', 0, True),
+            ('v1.0.1', 200, 'v1.1.0-beta.1', 0, False),
+            ('v1.0.1', 200, 'v1.0.0-0', 0, True),
+            ('v1.0.0', 200, 'v1.0.0-beta.1+build.01', 0, True),
+            ('v1.0.0', 200, 'v1.0.0+build.01', 0, False),
+            ('v1.0.0', 200, 'v1.0.0-01', 0, None),
+            ('v1.0.0', 200, 'v1.0.0-beta..1', 0, None),
+            ('v1.0.0', 200, 'v1.0.0-beta.', 0, None),
+            ('v1.0.0', 200, 'v1.0.0-', 0, None),
+            ('v1.0.0', 200, 'v1.0.0+build..1', 0, None),
             ('v1.0.0-beta.1', 404, None, 1, None),
+            ('v1.0.0+build.1', 404, None, 1, None),
         ]
         for tag, status, latest, api_exit, expected in cases:
             with self.subTest(tag=tag, status=status, latest=latest), tempfile.TemporaryDirectory() as directory:

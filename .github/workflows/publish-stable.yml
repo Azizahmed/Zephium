@@ -83,6 +83,18 @@ jobs:
                   raise SystemExit("A canonical stable tag is required; refusing to guess latest ordering.")
               return tuple(map(int, match.groups()))
 
+          def published(value):
+              match = re.fullmatch(
+                  r"v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)"
+                  r"(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?"
+                  r"(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?", value)
+              if match is None or (match[4] is not None and any(
+                  part.isdigit() and len(part) > 1 and part.startswith("0")
+                  for part in match[4].split(".")
+              )):
+                  raise SystemExit("Latest release tag is not valid semver; refusing to guess latest ordering.")
+              return tuple(map(int, match.groups()[:3])), match[4] is None
+
           candidate = stable(sys.argv[1])
           response = Path(sys.argv[2]).read_text().replace("\r\n", "\n")
           headers, separator, body = response.partition("\n\n")
@@ -95,7 +107,7 @@ jobs:
               release = json.loads(body)
               if release.get("draft") is not False or release.get("prerelease") is not False:
                   raise SystemExit("Latest release is not a published stable candidate.")
-              promote = candidate > stable(release["tag_name"])
+              promote = (candidate, True) > published(release["tag_name"])
           else:
               raise SystemExit("Latest release lookup failed; refusing publication.")
           print(str(promote).lower())
