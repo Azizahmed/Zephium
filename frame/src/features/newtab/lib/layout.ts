@@ -8,7 +8,7 @@ export type Layout = {
   /** The field's notch, narrowed so both top corners stay free. */
   notch: Notch;
   /** The page's controls, each in its own round pane (a capsule when it
-   *  holds words), in a top corner beside the notch and level with the
+   *  holds words), in the top corner beside the notch and level with the
    *  field, the last nearest the corner. */
   controls: Box[];
   /** Where the sky meets the page. */
@@ -25,6 +25,7 @@ const CORNER = 110;
 const CONTROL = { size: 32, gap: 6, inset: 14 };
 /** What two round controls take from the corner, which CORNER was set for. */
 const TWO_ROUND = CONTROL.inset + 2 * CONTROL.size + CONTROL.gap;
+/** The date's line, and what stands between the time, the name and it. */
 /** The line with the time and the date, and its distance under the name. */
 const WHEN = { gap: 16, height: 20 };
 
@@ -37,14 +38,8 @@ export function layout(
   {
     controls,
     clock,
-    corner: side = "end",
     wordmark = true,
-  }: {
-    controls: readonly number[];
-    clock: boolean;
-    corner?: "start" | "end";
-    wordmark?: boolean;
-  },
+  }: { controls: readonly number[]; clock: boolean; wordmark?: boolean },
 ): Layout {
   // Both top corners stay clear of the notch's flare for the controls in
   // one of them, so the field stays in the middle however wide they are.
@@ -53,13 +48,13 @@ export function layout(
   const notch = { ...NOTCH, width: Math.min(NOTCH.width, width - 2 * corner) };
 
   const buttonY = Math.round((NOTCH.height - CONTROL.size) / 2);
-  let edge = side === "end" ? width - CONTROL.inset : CONTROL.inset;
+  let right = width - CONTROL.inset;
   const buttons = controls
     .toReversed()
     .map((w) => {
-      const x = side === "end" ? edge - w : edge;
-      edge = side === "end" ? x - CONTROL.gap : x + w + CONTROL.gap;
-      return { x, y: buttonY, w, h: CONTROL.size };
+      const box = { x: right - w, y: buttonY, w, h: CONTROL.size };
+      right = box.x - CONTROL.gap;
+      return box;
     })
     .toReversed();
 

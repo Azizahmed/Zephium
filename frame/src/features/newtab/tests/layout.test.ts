@@ -53,13 +53,3 @@ it("removes the wordmark's height and clock gap and leaves the controls where th
   expect(hidden.notch).toEqual(normal.notch);
   expect(layout(1200, 800, { ...FULL, wordmark: false, clock: false }).when).toBeNull();
 });
-
-it("mirrors the controls into the start corner, the last still nearest it", () => {
-  const end = layout(1200, 800, FULL);
-  const start = layout(1200, 800, { ...FULL, corner: "start" });
-  expect(start.controls.map((box) => box.x)).toEqual(
-    end.controls.map((box) => 1200 - box.x - box.w),
-  );
-  expect(start.controls.at(-1)!.x).toBe(14);
-  expect(start.notch).toEqual(end.notch);
-});
