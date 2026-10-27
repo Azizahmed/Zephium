@@ -305,6 +305,16 @@
         queueMicrotask(() => {
           if (observedResizeSettlement === settlement) resizeSettling = false;
         });
+        // A page travels to the column's new edge natively; what the chrome
+        // draws beside it travels there the same way.
+        const main = !overPage && !reducedMotion() ? beside() : null;
+        const before = main?.getBoundingClientRect().left;
+        if (main && before !== undefined)
+          void tick().then(() => {
+            const shift = before - main.getBoundingClientRect().left;
+            if (Math.abs(shift) >= 0.5)
+              main.animate([{ translate: `${shift}px 0` }, { translate: "0 0" }], pushTiming());
+          });
         morph = null;
         reshaping = false;
         headerFresh = false;
