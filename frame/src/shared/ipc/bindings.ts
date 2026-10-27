@@ -2060,7 +2060,7 @@ export type PageAssistBlockV1 =
  */
 { kind: "text"; text: string; cites: PageAssistCiteV1[] } |
 /**  Item cards; `tab` is the page their marks are on. */
-{ kind: "items"; tab: string; items: PageAssistItemV1[] } | { kind: "opened"; tabs: PageAssistOpenedV1[] } | { kind: "steps"; steps: PageAssistStepV1[] } | { kind: "paused"; reason: PageAssistPauseV1 } | { kind: "style"; style: PageStyleProposalV1 } | { kind: "handoff"; handoff: PageAssistHandoffV1 };
+{ kind: "items"; tab: string; items: PageAssistItemV1[] } | { kind: "opened"; tabs: PageAssistOpenedV1[] } | { kind: "steps"; steps: PageAssistStepV1[] } | { kind: "search"; destination: string; query: string; state: PageAssistStepStateV1 } | { kind: "paused"; reason: PageAssistPauseV1 } | { kind: "style"; style: PageStyleProposalV1 } | { kind: "handoff"; handoff: PageAssistHandoffV1 };
 
 /**  What a Work handoff brings along. */
 export type PageAssistBringKindV1 = "task" | "note" | "tab" | "repository" | "folder" |
