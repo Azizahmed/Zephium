@@ -510,6 +510,8 @@ jobs:
 
           Installed copies update themselves. The Windows installer, browser executable and uninstaller are Authenticode-signed. SmartScreen reputation may still affect new downloads.
 
+          [Code signing policy](https://github.com/${GITHUB_REPOSITORY}/blob/${TAG}/docs/code-signing-policy.md)
+
           Verify a download with \`SHA256SUMS\` or \`gh attestation verify <file> --repo ${GITHUB_REPOSITORY}\`.
           EOF
           # releases/latest skips prereleases, and the website and updater read it.
