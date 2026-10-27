@@ -296,6 +296,18 @@ impl Lab {
                     std::process::exit(1);
                 }
             }
+        } else if step.get("offscreen_origin_admission").is_some() {
+            let id = this.extension.borrow().clone().unwrap_or_default();
+            match this.runtime.verify_offscreen_origin(&id) {
+                Ok(()) => {
+                    println!("OFFSCREEN ORIGIN PASSED: relative and absolute own pages admitted; cross-scheme and cross-host refused");
+                    next();
+                }
+                Err(error) => {
+                    eprintln!("OFFSCREEN ORIGIN FAILED: {error}");
+                    std::process::exit(1);
+                }
+            }
         } else if step.get("background").is_some() {
             let id = this.extension.borrow().clone().unwrap_or_default();
             this.runtime.start_background(&id, move |result| {

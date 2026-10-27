@@ -154,6 +154,17 @@ impl Runtime {
         crate::native::verify_open_admission(&self.shared, id)
     }
 
+    /// Exercises offscreen origin admission in the standalone main-thread lab.
+    #[cfg(feature = "lab")]
+    pub fn verify_offscreen_origin(&self, id: &str) -> Result<(), String> {
+        let loaded = self.shared.loaded.borrow();
+        let context = &loaded
+            .get(id)
+            .ok_or("fixture extension was not loaded")?
+            .context;
+        crate::offscreen::verify_origin(context)
+    }
+
     pub fn controller(&self) -> &WKWebExtensionController {
         &self.controller
     }
