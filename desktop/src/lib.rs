@@ -3630,6 +3630,21 @@ fn accepted_ui_operation() -> zephium_ipc::OperationAdmission {
     }
 }
 
+/// F11. On Windows the window's own caption steps aside while the window fills
+/// the screen, and only while it truly does.
+fn toggle_window_fullscreen(window: &WebviewWindow) {
+    let enter = !window.is_fullscreen().unwrap_or(false);
+    #[cfg(target_os = "windows")]
+    if enter {
+        platform::imp::set_caption_window_fullscreen(window, true);
+    }
+    let changed = window.set_fullscreen(enter).is_ok();
+    #[cfg(target_os = "windows")]
+    platform::imp::set_caption_window_fullscreen(window, enter == changed);
+    #[cfg(not(target_os = "windows"))]
+    let _ = changed;
+}
+
 fn execute_command(app: &tauri::AppHandle, id: &str) -> zephium_ipc::OperationAdmission {
     if id == "browser.quit" {
         app.exit(0);
@@ -3660,9 +3675,7 @@ fn execute_command(app: &tauri::AppHandle, id: &str) -> zephium_ipc::OperationAd
         };
         return if !content_fullscreen::held()
             && app
-                .run_on_main_thread(move || {
-                    let _ = window.set_fullscreen(!window.is_fullscreen().unwrap_or(false));
-                })
+                .run_on_main_thread(move || toggle_window_fullscreen(&window))
                 .is_ok()
         {
             accepted_ui_operation()

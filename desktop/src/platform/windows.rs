@@ -147,13 +147,32 @@ pub fn init(
     if !menus::install(window) {
         crate::write_diagnostic(format_args!("chrome: using system menu rendering"));
     }
-    if !caption::install(window) {
+    if caption::install(window) {
+        bridge_caption_keys(window);
+    } else {
         // A visual enhancement must never remove access to window controls.
         let _ = window.set_decorations(true);
     }
     let hardened = harden_privileged(window, expected_user_data_folder, on_runtime_update);
     apply_material(window, true);
     hardened
+}
+
+/// F10 and Alt+Space typed into the chrome WebView never reach the window, so
+/// the caption hears them from the WebView's accelerator hook instead.
+fn bridge_caption_keys(window: &WebviewWindow) {
+    let scheduled = window.with_webview(|webview| {
+        if let Err(error) = zephium_engine::bridge_caption_keys(&webview.controller()) {
+            crate::write_diagnostic(format_args!(
+                "caption: keyboard bridge unavailable: {error}"
+            ));
+        }
+    });
+    if scheduled.is_err() {
+        crate::write_diagnostic(format_args!(
+            "caption: keyboard bridge could not be scheduled"
+        ));
+    }
 }
 
 /// Tauri does not expose Wry's permission callback. Install the WebView2
@@ -458,12 +477,17 @@ impl From<windows::core::Error> for StartupFailure {
     }
 }
 
-// Undecorated windows lose DWM rounding unless asked for explicitly.
 /// Keeps the window's own caption out of a page that fills the screen.
 pub fn set_caption_suppressed(window: &WebviewWindow, suppressed: bool) {
-    caption::set_suppressed(window, suppressed);
+    caption::set_suppressed(window, caption::Suppression::Content, suppressed);
 }
 
+/// Keeps the caption out of a window the person made fullscreen themselves.
+pub fn set_caption_window_fullscreen(window: &WebviewWindow, fullscreen: bool) {
+    caption::set_suppressed(window, caption::Suppression::Window, fullscreen);
+}
+
+// Undecorated windows lose DWM rounding unless asked for explicitly.
 pub fn round_corners(window: &WebviewWindow) {
     use windows::Win32::Graphics::Dwm::{
         DwmSetWindowAttribute, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND,
@@ -518,6 +542,7 @@ pub fn apply_material(window: &WebviewWindow, dark: bool) -> bool {
         None => (245, 245, 249, 96),
     };
     set_dark_frame(window, dark);
+    caption::set_dark(window, dark);
     // Use the fallible native adapter directly; the Tauri effect dispatcher
     // discards the underlying DWM error and can falsely report acrylic.
     let preference = crate::material::preference();
