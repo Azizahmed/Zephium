@@ -284,6 +284,7 @@ pub fn harden_privileged(
                 )
                 .into());
             }
+            zephium_engine::configure_windows_reputation_checking(&core)?;
             let settings4 = require::<ICoreWebView2Settings4>(&settings, "Settings4")?;
             settings4.SetIsPasswordAutosaveEnabled(false)?;
             settings4.SetIsGeneralAutofillEnabled(false)?;

@@ -248,3 +248,30 @@ not reported as one, so the failure lands on the document the person asked for
 and the host can show its own explanation. The handler's `FailedDocument` says
 when that error document replaced the shown page, with the address from Wry's
 in-flight navigation record; macOS always reports `Kept`.
+
+### Independent Windows controller initialization (2026-10-27)
+
+`with_controller_initialization_hook` configures the retained controller before
+WebView initialization and navigation without changing browser-extension
+options. The separate extension startup gate retains its original admission
+role and runs first when present. Either failure follows owned controller cleanup.
+Zephium applies reputation settings through this hook for extension-disabled
+ordinary, private and agent controllers as well as admitted extension contexts.
+Portable callback tests execute OFF-preserving configuration and gate refusal;
+Windows builder tests cover the actual enablement field. The Windows-only native
+`native_controller_hook_applies_reputation_with_extensions_disabled` fixture
+constructs default/private/agent-shaped controllers with requested extensions OFF,
+verifies actual Settings8 reputation readback, and refuses an inert local extension
+install. An extension-enabled control must install that same fixture successfully.
+The resulting environment has no enablement getter, so this native control
+checks admission in addition to the builder option. It requires
+an unmanaged Windows desktop/WebView2 runtime; native execution remains pending here.
+Native Windows/WebView2 execution remains required; cross-target lint with an empty C-object shim is not
+native SDK or device evidence. The upstream revision and dependency graph are
+unchanged, so the application and standalone fork locks retain their versions.
+
+The required standalone formatter exposed pre-existing WebKit whitespace drift;
+only those formatter changes are normalized. The existing eight-argument
+`attach_handlers` registration boundary carries a narrow lint expectation with
+its retained-owner rationale. Its signature/behavior is unchanged and workspace
+and standalone Clippy retain `-D warnings`.

@@ -1227,13 +1227,25 @@ These inherited properties must not be overstated:
   journal-authorized profile database. Cookie inspection/editing and origin-selective
   clearing are not implemented, and the full-profile coordinator still requires the
   packaged native data-type/crash matrix described in the release gates.
-- "Zero telemetry" currently means no first-party Zephium telemetry client is wired
-  into this tree. It does not mean pages make no requests or that OS WebViews and
-  services make no vendor requests. For example, WebView2 content protection remains
-  enabled and may follow Microsoft/OS policy. Zephium configures custom crash
-  reporting to prevent WebView2's automatic crash upload; this does not disable
-  separately governed required diagnostics or SmartScreen. A production privacy claim needs a
-  platform-by-platform traffic audit.
+- Zephium has no first-party browsing telemetry client. On Windows, Microsoft
+  Edge WebView2 still collects required diagnostic data regardless of the Windows
+  optional diagnostic-data setting. Optional collection follows Windows Settings
+  → Privacy (Windows 10) or Privacy & security (Windows 11) → Diagnostics & feedback,
+  and organization policy.
+  Settings → Privacy links to that fixed system pane. Zephium configures custom
+  crash reporting to prevent WebView2's automatic crash uploads; that does not
+  disable required diagnostics. Microsoft Defender SmartScreen is on by default
+  and can send website addresses and download information to Microsoft for reputation
+  checks. The Windows-only Privacy switch persists a restart-required choice;
+  it does not claim to change required diagnostics. Windows/organization policy
+  may independently override SmartScreen. Default ON uses WebView2's native
+  default without requiring Settings8. Only explicit OFF is set and read back;
+  API failure or refusal keeps browsing available and marks the switch managed.
+  Unavailable or slow startup preference reads retain ON for that launch; Settings
+  shows read-only ON with a local-read explanation until restart. See [Microsoft's WebView2 data and
+  privacy documentation](https://learn.microsoft.com/en-us/microsoft-edge/webview2/concepts/data-privacy)
+  and [Settings8's reputation-checking contract](https://learn.microsoft.com/en-us/microsoft-edge/webview2/reference/win32/icorewebview2settings8).
+  These controls do not establish a platform traffic audit.
 - A sandbox limits impact; it does not make engine vulnerabilities impossible. Native
   engine security updates are part of the product's security boundary.
 - Hard runtime admission, recommended maintenance, and review age are separate
@@ -1337,7 +1349,16 @@ These inherited properties must not be overstated:
   and default context menus and requires Settings7 to hide PDF Save, Save As, and Print.
   Privileged downloads remain denied; raw human views use the native download adapter. Both view classes replace Wry's
   broader default browser arguments with only the `msWebOOUI`/`msPdfOOUI` suppressions,
-  so Zephium does not deliberately disable SmartScreen.
+  so browser arguments do not disable SmartScreen. One preference is captured
+  before controller construction; changing it requires restarting Zephium.
+  Default ON keeps WebView2's own default without querying Settings8. Only explicit
+  OFF requests `IsReputationCheckingRequired = false` and reads it back on raw,
+  agent, extension-host, extension-popup and privileged controllers. Missing API
+  support, readback failure or policy refusal keeps browsing available and marks
+  the switch managed. Applying OFF to every controller matters because a shared
+  UDF keeps SmartScreen on while any controller requires it. Readback verifies the
+  requested controller value; Windows/organization policy governs the effective
+  service.
 - Every view also requires CoreWebView2_18. Raw and privileged subframe navigations are
   checked by native handlers, and OS-registered external URI schemes are always
   cancelled. Client-certificate selection is also cancelled before WebView2 can fall
