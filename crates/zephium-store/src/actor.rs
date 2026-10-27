@@ -28,7 +28,7 @@ use zephium_core::navigation;
 use zephium_core::permissions::{PagePermissionCatalogRevision, PagePermissionPatch};
 use zephium_core::ports::store::{
     BlockerConfigLoadOutcome, BlockerConfigUpdateOutcome, BlockerSiteLoadOutcome,
-    BlockerSiteUpdateOutcome, ChatSummary, HistoryHit, HistoryVisit,
+    BlockerSiteUpdateOutcome, ChatSummary, HistoryHit, HistoryPageError, HistoryVisit,
     PagePermissionCatalogLoadOutcome, PagePermissionCatalogMutationOutcome,
     ProfileDeletionAuthorizeOutcome, ProfileDeletionFinalizeOutcome, ProfileDeletionLoad,
     SessionLoad, Store, StoreShutdownOutcome, UserscriptCatalogLoadOutcome,
@@ -387,7 +387,7 @@ enum Cmd {
         since: Option<i64>,
         before: Option<i64>,
         limit: u32,
-        reply: Sender<Vec<HistoryVisit>>,
+        reply: Sender<Result<Vec<HistoryVisit>, HistoryPageError>>,
     },
     ForgetHistoryUrls(ProfileId, Vec<String>, Sender<Option<u32>>),
     ImportHistory(
@@ -1365,12 +1365,23 @@ impl Store for SqliteStore {
         before: Option<i64>,
         limit: u32,
     ) -> Vec<HistoryVisit> {
+        self.history_page_checked(profile, query, since, before, limit)
+            .unwrap_or_default()
+    }
+
+    fn history_page_checked(
+        &self,
+        profile: ProfileId,
+        query: &str,
+        since: Option<i64>,
+        before: Option<i64>,
+        limit: u32,
+    ) -> Result<Vec<HistoryVisit>, HistoryPageError> {
         if limit == 0 || query.len() > MAX_HISTORY_QUERY_BYTES {
-            return Vec::new();
+            return Err(HistoryPageError::Invalid);
         }
         let (tx, rx) = mpsc::channel();
-        if self
-            .tx
+        self.tx
             .try_send(Cmd::HistoryPage {
                 profile,
                 query: query.to_owned(),
@@ -1379,11 +1390,12 @@ impl Store for SqliteStore {
                 limit: limit.min(hub::MAX_HISTORY_PAGE),
                 reply: tx,
             })
-            .is_err()
-        {
-            return Vec::new();
-        }
-        rx.recv_timeout(STORE_RPC_TIMEOUT).unwrap_or_default()
+            .map_err(|_| HistoryPageError::NotAdmitted)?;
+        rx.recv_timeout(STORE_RPC_TIMEOUT)
+            .map_err(|error| match error {
+                mpsc::RecvTimeoutError::Timeout => HistoryPageError::TimedOut,
+                mpsc::RecvTimeoutError::Disconnected => HistoryPageError::Unavailable,
+            })?
     }
 
     fn forget_history_urls(&self, profile: ProfileId, urls: &[String]) -> u32 {
@@ -2024,7 +2036,7 @@ fn actor(
                 limit,
                 reply,
             }) => {
-                let _ = reply.send(hub.history_page(profile, &query, since, before, limit));
+                let _ = reply.send(hub.history_page_checked(profile, &query, since, before, limit));
             }
             Some(Cmd::ForgetHistoryUrls(profile, urls, reply)) => {
                 let session_durable = hub.knows(profile) || flush(&mut hub, &mut pending);

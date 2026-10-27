@@ -31,6 +31,16 @@ pub struct ImportedVisit {
 /// Visits one import may carry; the history budget prunes the oldest after.
 pub const MAX_IMPORTED_VISITS: usize = 50_000;
 
+/// A failed read is distinct from a successfully empty history page.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HistoryPageError {
+    Invalid,
+    Unavailable,
+    NotAdmitted,
+    TimedOut,
+    Failed,
+}
+
 /// One recorded visit. Unlike `HistoryHit` these are not deduplicated by
 /// address: a history list shows every time a page was opened.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -545,6 +555,18 @@ pub trait Store {
         before: Option<i64>,
         limit: u32,
     ) -> Vec<HistoryVisit>;
+    /// Completeness-sensitive readers must use this method. Adapters without
+    /// a typed read fail closed rather than treating failures as EOF.
+    fn history_page_checked(
+        &self,
+        _profile: ProfileId,
+        _query: &str,
+        _since: Option<i64>,
+        _before: Option<i64>,
+        _limit: u32,
+    ) -> Result<Vec<HistoryVisit>, HistoryPageError> {
+        Err(HistoryPageError::Unavailable)
+    }
     /// Removes every visit to each address; returns how many rows went.
     fn forget_history_urls(&self, profile: ProfileId, urls: &[String]) -> u32;
     /// `None` means the deletion or recovery-copy disposal failed. Zero is

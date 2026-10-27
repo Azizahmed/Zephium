@@ -4469,6 +4469,78 @@ fn imported_history_keeps_its_times_and_is_not_added_twice() {
 }
 
 #[test]
+fn checked_history_pages_distinguish_queue_refusal_timeout_and_storage_errors_from_eof() {
+    let profile = ProfileId::from(1);
+    let (tx, _rx) = mpsc::sync_channel(0);
+    let store = test_store_with_sender(tx);
+    assert_eq!(
+        store.history_page_checked(profile, "", None, None, 10),
+        Err(HistoryPageError::NotAdmitted)
+    );
+    let (tx, _rx) = mpsc::sync_channel(1);
+    let store = test_store_with_sender(tx);
+    assert_eq!(
+        store.history_page_checked(profile, "", None, None, 10),
+        Err(HistoryPageError::TimedOut)
+    );
+    let dir = tempfile::tempdir().unwrap();
+    let mut hub = Hub::open(dir.path().to_path_buf()).unwrap();
+    hub.save(&sample()).unwrap();
+    assert_eq!(
+        hub.history_page_checked(profile, "", None, None, 10),
+        Ok(Vec::new())
+    );
+    Connection::open(dir.path().join(format!("profile-{profile}.sqlite")))
+        .unwrap()
+        .execute_batch("DROP TABLE history")
+        .unwrap();
+    assert_eq!(
+        hub.history_page_checked(profile, "", None, None, 10),
+        Err(HistoryPageError::Failed)
+    );
+}
+
+#[test]
+fn checked_history_pages_skip_disallowed_rows_without_shortening_export_pages() {
+    let dir = tempfile::tempdir().unwrap();
+    let profile = ProfileId::from(1);
+    let mut hub = Hub::open(dir.path().to_path_buf()).unwrap();
+    hub.save(&sample()).unwrap();
+    let visits: Vec<_> = (1..=405)
+        .map(|id| zephium_core::ports::store::ImportedVisit {
+            url: format!("https://visit{id}.example/"),
+            title: "Kept".into(),
+            visited_at: id,
+        })
+        .collect();
+    assert_eq!(hub.import_history(profile, &visits), Some(405));
+    let conn = Connection::open(dir.path().join(format!("profile-{profile}.sqlite"))).unwrap();
+    conn.execute(
+        "UPDATE history SET url = 'javascript:invalid' WHERE id BETWEEN 200 AND 203 OR id = 405",
+        [],
+    )
+    .unwrap();
+    for query in ["", "kept"] {
+        let mut cursor = None;
+        let mut exported = Vec::new();
+        for expected_size in [200, 200, 0] {
+            let page = hub
+                .history_page_checked(profile, query, None, cursor, 200)
+                .unwrap();
+            assert_eq!(page.len(), expected_size, "{query}");
+            assert!(page.iter().all(|row| navigation::is_allowed_str(&row.url)));
+            cursor = page.last().map(|row| row.id).or(cursor);
+            exported.extend(page.into_iter().map(|row| row.id));
+        }
+        let expected: Vec<_> = (1..=404)
+            .rev()
+            .filter(|id| !(200..=203).contains(id))
+            .collect();
+        assert_eq!(exported, expected, "{query}");
+    }
+}
+
+#[test]
 fn an_idle_store_expires_its_backup_without_a_command_or_session_save() {
     let dir = tempfile::tempdir().unwrap();
     let state = SessionState::default();
