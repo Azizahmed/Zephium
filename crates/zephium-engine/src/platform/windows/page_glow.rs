@@ -16,19 +16,13 @@ use std::time::{Duration, Instant};
 
 use windows::core::{Interface as _, HSTRING};
 use windows::Foundation::TimeSpan;
-use windows::System::DispatcherQueueController;
 use windows::Win32::Foundation::{HWND, RECT};
 use windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_USE_IMMERSIVE_DARK_MODE};
-use windows::Win32::System::WinRT::Composition::ICompositorDesktopInterop;
-use windows::Win32::System::WinRT::{
-    CreateDispatcherQueueController, DispatcherQueueOptions, DQTAT_COM_NONE, DQTYPE_THREAD_CURRENT,
-};
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::WindowsAndMessaging::{
     GetAncestor, GetClientRect, IsWindowVisible, GA_ROOT,
 };
 use windows::UI::Color;
-use windows::UI::Composition::Desktop::DesktopWindowTarget;
 use windows::UI::Composition::{
     AnimationIterationBehavior, CompositionBrush, CompositionGradientExtendMode,
     CompositionLinearGradientBrush, CompositionMappingMode, CompositionPropertySet, Compositor,
@@ -75,7 +69,7 @@ const AURORA_DARK: [[f64; 3]; 4] = [
 struct Glow {
     tab: ItemId,
     window: HWND,
-    target: DesktopWindowTarget,
+    layer: Rc<super::page_layer::PageLayer>,
     root: ContainerVisual,
     clock: CompositionPropertySet,
     dark: bool,
@@ -92,26 +86,7 @@ struct Glow {
 }
 
 thread_local! {
-    static COMPOSITOR: RefCell<Option<(DispatcherQueueController, Compositor)>> = const { RefCell::new(None) };
     static GLOWS: RefCell<HashMap<ItemId, Glow>> = RefCell::new(HashMap::new());
-}
-
-fn compositor() -> Option<Compositor> {
-    COMPOSITOR.with(|slot| {
-        let mut slot = slot.borrow_mut();
-        if slot.is_none() {
-            let options = DispatcherQueueOptions {
-                dwSize: std::mem::size_of::<DispatcherQueueOptions>() as u32,
-                threadType: DQTYPE_THREAD_CURRENT,
-                apartmentType: DQTAT_COM_NONE,
-            };
-            // SAFETY: creates this thread's dispatcher queue, which the
-            // compositor requires; it lives as long as the thread's glows.
-            let queue = unsafe { CreateDispatcherQueueController(options) }.ok()?;
-            *slot = Some((queue, Compositor::new().ok()?));
-        }
-        slot.as_ref().map(|(_, compositor)| compositor.clone())
-    })
 }
 
 /// Shows, holds or removes the glow on `tab`'s page view.
@@ -238,11 +213,8 @@ const PERIMETER: &str = "(2 * (host.Size.X + host.Size.Y) - 4 * r)";
 
 impl Glow {
     fn new(tab: ItemId, window: HWND, dark: bool, scale: f32) -> Option<Self> {
-        let compositor = compositor()?;
-        let interop: ICompositorDesktopInterop = compositor.cast().ok()?;
-        // SAFETY: a topmost target on this live container window: DWM draws
-        // it above the WebView2 child windows, and it takes no input.
-        let target = unsafe { interop.CreateDesktopWindowTarget(window, true) }.ok()?;
+        let compositor = super::page_layer::compositor()?;
+        let layer = super::page_layer::layer(window)?;
         let root = compositor.CreateContainerVisual().ok()?;
         root.SetRelativeSizeAdjustment(Vector2 { X: 1.0, Y: 1.0 })
             .ok()?;
@@ -253,7 +225,7 @@ impl Glow {
         let glow = Self {
             tab,
             window,
-            target,
+            layer,
             root,
             clock,
             dark,
@@ -509,7 +481,7 @@ impl Glow {
         }
         self.asked.set(Instant::now());
         if !self.attached.replace(true) {
-            let _ = self.target.SetRoot(&self.root);
+            let _ = self.layer.attach(&self.root);
             let mut client = RECT::default();
             // SAFETY: plain reads of the live container window.
             let (sized, visible) = unsafe {
@@ -547,7 +519,7 @@ impl Glow {
     /// The clock runs on from where it stopped; a whole trip later the
     /// colours are where they began, so each loop restarts unseen.
     fn travel(&self) -> Option<()> {
-        let compositor = compositor()?;
+        let compositor = super::page_layer::compositor()?;
         let animation = compositor.CreateScalarKeyFrameAnimation().ok()?;
         let linear = compositor.CreateLinearEasingFunction().ok()?;
         animation
@@ -572,7 +544,7 @@ impl Glow {
     }
 
     fn fade(&self, to: f32, duration: Duration) -> Option<()> {
-        let compositor = compositor()?;
+        let compositor = super::page_layer::compositor()?;
         let animation = compositor.CreateScalarKeyFrameAnimation().ok()?;
         animation.InsertKeyFrame(1.0, to).ok()?;
         animation.SetDuration(TimeSpan::from(duration)).ok()?;
@@ -605,13 +577,13 @@ impl Glow {
         let total = rise + hold + FADE_OUT;
         let _ = self.fade_out(peak, rise, hold, total);
         let current = self.generation.clone();
-        let (target, clock) = (self.target.clone(), self.clock.clone());
+        let (layer, root, clock) = (self.layer.clone(), self.root.clone(), self.clock.clone());
         let (tab, since) = (self.tab, self.since.get());
         let detached =
             super::schedule_browser_timeout(total + Duration::from_millis(50), move || {
                 if current.get() == generation {
                     let _ = clock.StopAnimation(&HSTRING::from("t"));
-                    let _ = target.SetRoot(None);
+                    layer.detach(&root);
                     crate::page_reader::note(format_args!(
                         "page_glow removed tab={tab} reason=off shown_ms={}",
                         since.elapsed().as_millis()
@@ -624,7 +596,7 @@ impl Glow {
     }
 
     fn fade_out(&self, peak: f32, rise: Duration, hold: Duration, total: Duration) -> Option<()> {
-        let compositor = compositor()?;
+        let compositor = super::page_layer::compositor()?;
         let animation = compositor.CreateScalarKeyFrameAnimation().ok()?;
         let at = |time: Duration| (time.as_secs_f32() / total.as_secs_f32()).clamp(0.0, 1.0);
         if !rise.is_zero() {
@@ -649,8 +621,7 @@ impl Drop for Glow {
             ));
         }
         let _ = self.clock.StopAnimation(&HSTRING::from("t"));
-        let _ = self.target.SetRoot(None);
-        let _ = self.target.Close();
+        self.layer.detach(&self.root);
     }
 }
 

@@ -360,10 +360,16 @@ impl EngineHost {
         }
     }
 
-    #[cfg(target_os = "macos")]
-    pub(crate) fn raise_chrome(&mut self, window: WindowId, raised: bool) {
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    pub(crate) fn raise_chrome(&mut self, window: WindowId, raised: bool, card: Rect) {
         if let Some(stage) = self.stages.get(&window) {
-            stage.raise_chrome(raised);
+            #[cfg(target_os = "macos")]
+            {
+                let _ = card;
+                stage.raise_chrome(raised);
+            }
+            #[cfg(target_os = "windows")]
+            stage.raise_chrome(raised, card);
         }
     }
 

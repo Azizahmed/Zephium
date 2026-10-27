@@ -806,7 +806,9 @@ pub trait Engine {
     }
     /// Stacks the chrome over the content while a hidden sidebar is shown, or
     /// back beneath it. Only the stacking changes; nothing is laid out.
-    fn raise_chrome(&self, _window: WindowId, _raised: bool) -> NativeDispatch {
+    /// `card` is where the column stands over the page, in window
+    /// coordinates, for a platform whose chrome must be cut to it.
+    fn raise_chrome(&self, _window: WindowId, _raised: bool, _card: Rect) -> NativeDispatch {
         NativeDispatch::Unsupported
     }
     /// Asks the next content layout applied to `window` to move rather than

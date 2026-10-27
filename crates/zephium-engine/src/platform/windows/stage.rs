@@ -179,6 +179,12 @@ struct State {
     covers: HashMap<ItemId, (HWND, u64)>,
     /// The page shown fullscreen: square corners, above everything else.
     fullscreen: Option<ItemId>,
+    /// The chrome's host window, once a hidden sidebar's card has needed it.
+    chrome: Option<HWND>,
+    /// Where the hidden sidebar's card stands over the page, while it does,
+    /// and what has been cut to for it.
+    card: Option<Rect>,
+    card_clip: Option<(PhysicalRect, i32)>,
 }
 
 /// The page travelling beside the sidebar. Child windows cannot be moved by
@@ -385,6 +391,9 @@ impl Stage {
             caption_moving,
             covers: HashMap::new(),
             fullscreen: None,
+            chrome: None,
+            card: None,
+            card_clip: None,
         }));
         CAPTION_STAGES.with(|stages| {
             stages
@@ -597,6 +606,8 @@ impl Stage {
         );
         state.dirty.insert(id);
         drop(state);
+        // A new page window is made over its siblings, the card included.
+        settle_card(&self.state);
         schedule_sync(&self.state);
         true
     }
@@ -607,16 +618,30 @@ impl Stage {
         if state.preview.is_some_and(|moving| moving.id == id) {
             state.preview = None;
         }
-        state.views.remove(&id);
+        let container = state.views.remove(&id).map(|view| view.container);
         state.ready.remove(&id);
         state.dirty.remove(&id);
         state.visibility_uncertain.remove(&id);
         state.visible.remove(&id);
         let cover = state.covers.remove(&id);
         drop(state);
+        if let Some(container) = container {
+            super::sidebar_card::forget(container);
+        }
         if let Some((cover, _)) = cover {
             let _ = unsafe { DestroyWindow(cover) };
         }
+    }
+
+    /// Brings the chrome over the pages inside the card of a hidden sidebar,
+    /// or puts it back beneath them.
+    pub fn raise_chrome(&self, raised: bool, card: Rect) {
+        let Ok(mut state) = self.state.try_borrow_mut() else {
+            return;
+        };
+        state.card = raised.then_some(card);
+        drop(state);
+        settle_card(&self.state);
     }
 
     /// Stacks an opaque child in the page ground over the WebView2 inside its
@@ -1489,6 +1514,7 @@ fn sync(state: &Rc<RefCell<State>>) {
             }
         }
     }
+    settle_card(state);
     let transition = state.borrow().fullscreen_transition.clone();
     if let Some(transition) = transition {
         transition.raise();
@@ -1508,6 +1534,89 @@ fn sync(state: &Rc<RefCell<State>>) {
         }
         schedule_sync(state);
     }
+}
+
+/// Keeps the chrome over the pages, cut to the hidden sidebar's card, with
+/// the card's shadow on the pages, for as long as the card is out; and puts
+/// it back as it was when it is not. A fullscreen page stays above all.
+fn settle_card(state: &Rc<RefCell<State>>) {
+    let (parent, card, chrome, clip, pages) = {
+        let Ok(state) = state.try_borrow() else {
+            return;
+        };
+        let pages: Vec<(HWND, Option<PhysicalRect>)> = state
+            .views
+            .values()
+            .map(|view| {
+                let applied = view.applied.get();
+                let shown = applied.window_visible == Some(true);
+                (view.container, applied.container_rect.filter(|_| shown))
+            })
+            .collect();
+        (
+            state.parent,
+            state.card.filter(|_| state.fullscreen.is_none()),
+            state.chrome,
+            state.card_clip,
+            pages,
+        )
+    };
+    let Some(card) = card else {
+        if clip.is_some() {
+            let lowered = chrome.is_none_or(|chrome| {
+                super::sidebar_card::is_live(chrome)
+                    && super::sidebar_card::stack_chrome(chrome, false)
+            });
+            if lowered {
+                if let Ok(mut state) = state.try_borrow_mut() {
+                    state.card_clip = None;
+                }
+            }
+        }
+        super::sidebar_card::lift();
+        return;
+    };
+    let scale = scale_of(parent);
+    let mut client = RECT::default();
+    if unsafe { GetClientRect(parent, &mut client) }.is_err() {
+        return;
+    }
+    let Some(rect) = crate::card_geometry::card_pixels(card, (client.right, client.bottom), scale)
+    else {
+        return;
+    };
+    let chrome = match chrome.filter(|chrome| super::sidebar_card::is_live(*chrome)) {
+        Some(chrome) => chrome,
+        None => {
+            let containers: Vec<HWND> = pages.iter().map(|(container, _)| *container).collect();
+            let Some(found) = super::sidebar_card::find_chrome(parent, &containers) else {
+                return;
+            };
+            if let Ok(mut state) = state.try_borrow_mut() {
+                state.chrome = Some(found);
+            }
+            found
+        }
+    };
+    let diameter = ((RADIUS * scale * 2.0).round() as i32).max(1);
+    if clip != Some((rect, diameter)) && super::sidebar_card::clip_chrome(chrome, rect, diameter) {
+        if let Ok(mut state) = state.try_borrow_mut() {
+            state.card_clip = Some((rect, diameter));
+        }
+    }
+    if !super::sidebar_card::is_on_top(parent, chrome) {
+        super::sidebar_card::stack_chrome(chrome, true);
+    }
+    let placements: Vec<super::sidebar_card::Placement> = pages
+        .into_iter()
+        .filter_map(|(container, rect)| {
+            Some(super::sidebar_card::Placement {
+                container,
+                rect: rect?,
+            })
+        })
+        .collect();
+    super::sidebar_card::cast(&placements, rect, scale, dark_theme(parent));
 }
 
 /// Narrows a page's rounded region to the part of it inside the stage.

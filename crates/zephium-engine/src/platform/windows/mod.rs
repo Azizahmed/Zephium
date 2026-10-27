@@ -56,6 +56,7 @@ mod cookie_transfer;
 pub(crate) mod extensions;
 #[cfg(feature = "agentic-browser")]
 pub(crate) mod page_glow;
+mod page_layer;
 #[cfg(feature = "agentic-browser")]
 mod semantic_action;
 #[cfg(feature = "agentic-browser")]
@@ -63,6 +64,7 @@ mod semantic_action;
 // physical Windows isolated-world qualifier promotes the support claim.
 #[allow(dead_code)]
 mod semantic_runtime;
+mod sidebar_card;
 // The bounded native capture adapter is compiled now, but the Windows host
 // keeps screenshot dispatch closed with semantic support until qualification.
 mod apps;

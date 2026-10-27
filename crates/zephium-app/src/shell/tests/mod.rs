@@ -787,7 +787,7 @@ impl Engine for FakeEngine {
         self.previews.lock().unwrap().push(preview);
         self.native_admission()
     }
-    fn raise_chrome(&self, window: WindowId, raised: bool) -> NativeDispatch {
+    fn raise_chrome(&self, window: WindowId, raised: bool, _card: Rect) -> NativeDispatch {
         self.log(format!("raise@{window} {raised}"));
         self.native_admission()
     }
