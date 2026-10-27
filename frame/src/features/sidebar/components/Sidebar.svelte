@@ -85,6 +85,7 @@
   );
   let away = $state(isHidden());
   let handing = $state<"solid" | "fading" | null>(null);
+  let covering = $state(false);
   /** How long past the slide's own length native's page may still be on its
    *  way: it sets off once the layout has crossed to native and back. */
   const ARRIVAL_MARGIN_MS = 120;
@@ -102,26 +103,19 @@
   });
   $effect(() => {
     if (!hidden && untrack(() => away && peeking && overPage && !reducedMotion())) {
-      // Shown from the card, the column takes its place at once, its window
-      // controls with it, still wearing the card's frost and still over the
-      // page while the page slides out from under it; then the frost fades
-      // into the column's own material and the chrome goes back beneath.
-      // Gone beneath at once, it would leave the page bare where it stood.
+      // Shown from the card, the card is the column at once, its window
+      // controls with it, while native slides the page out from beside it;
+      // the card's frost fades into the column's own material on the way.
       handing = "solid";
       away = false;
-      let faded: ReturnType<typeof setTimeout> | undefined;
-      const arrived = setTimeout(
-        () => {
-          handing = "fading";
-          void commands.sidebarPeek(false, false, false);
-          faded = setTimeout(() => (handing = null), duration("base"));
-        },
-        duration("page") + ARRIVAL_MARGIN_MS,
-      );
+      let frame = requestAnimationFrame(() => {
+        frame = 0;
+        handing = "fading";
+      });
+      const faded = setTimeout(() => (handing = null), duration("page"));
       return () => {
-        clearTimeout(arrived);
+        cancelAnimationFrame(frame);
         clearTimeout(faded);
-        if (untrack(() => handing) === "solid") void commands.sidebarPeek(false, false, false);
         handing = null;
       };
     }
@@ -183,8 +177,20 @@
     // Native's slide sets off a moment after this one is asked for, so the
     // column waits until the page has surely covered it: let go before, its
     // last uncovered strip, the toolbar's first icons, blinks out.
-    const covered = setTimeout(() => (away = true), duration("page") + ARRIVAL_MARGIN_MS);
-    return () => clearTimeout(covered);
+    // What the page has yet to cover fades as it goes, so no icon is left
+    // standing alone in the last strip.
+    covering = true;
+    const covered = setTimeout(
+      () => {
+        covering = false;
+        away = true;
+      },
+      duration("page") + ARRIVAL_MARGIN_MS,
+    );
+    return () => {
+      clearTimeout(covered);
+      covering = false;
+    };
   });
   // The column becomes the card already out of sight: only from the next
   // frame on does the card slide, so it never crosses the window's gutter.
@@ -298,8 +304,7 @@
     clearTimeout(linger);
     clearTimeout(lowered);
     untrack(() => {
-      // A column handed over from the card goes beneath once the page is out.
-      if (peeking && handing === null) void commands.sidebarPeek(false, false, false);
+      if (peeking) void commands.sidebarPeek(false, false, false);
       peeking = false;
     });
   });
@@ -448,6 +453,7 @@
   style:height={leaving ? `${leaving.height}px` : undefined}
   style:--sidebar-frost={away || handing ? `url("${FROSTS[scene()]}")` : undefined}
   data-handing={handing ?? undefined}
+  data-covering={covering || undefined}
   data-tauri-drag-region="deep"
   aria-label={m.ui_browser_sidebar()}
   style:width={`${width}px`}
@@ -562,8 +568,15 @@
     translate: 0 0;
   }
 
-  /* Handed over from the card, the column keeps the card's frost until the
-     page has slid out from under it, then lets it go. */
+  /* Hidden over a page, the column's contents fade while the page covers
+     them, gone by the time it is all but covered. */
+  .browser-sidebar[data-covering] > :global(*) {
+    opacity: 0;
+    transition: opacity calc(var(--motion-page) * 0.6) var(--ease-out);
+  }
+
+  /* Handed over from the card, the column lets the card's frost go as the
+     page slides out from beside it. */
   .browser-sidebar[data-handing] {
     isolation: isolate;
   }
@@ -576,7 +589,7 @@
     border-radius: var(--content-radius);
     background: var(--sidebar-frost) center / cover;
     pointer-events: none;
-    transition: opacity var(--motion-base) var(--ease-out);
+    transition: opacity var(--motion-page) var(--ease-out);
   }
 
   .browser-sidebar[data-handing="fading"]::before {

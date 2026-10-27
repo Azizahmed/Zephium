@@ -21,7 +21,8 @@ use objc2_foundation::{
     NSObjectProtocol, NSPoint, NSRect, NSSize, NSString, NSValue,
 };
 use objc2_quartz_core::{
-    kCAFillModeForwards, CABasicAnimation, CAMediaTiming, CAMediaTimingFunction, CATransaction,
+    kCAFillModeForwards, CABasicAnimation, CALayer, CAMediaTiming, CAMediaTimingFunction,
+    CATransaction,
 };
 
 use zephium_core::geometry::Rect;
@@ -439,6 +440,45 @@ impl ContentStage {
             (0.0, frame.origin.x - current.origin.x)
         };
         let animation = translation(from, to, SLIDE_SECONDS);
+        // Travelling right from under a hidden sidebar's card, the stage gives
+        // way to the column the card becomes: it is cut at its new edge,
+        // which stays where it is while the stage slides out past it, so the
+        // page never shows where the column now stands. The cut is a mask
+        // running the other way in the same transaction, so the compositor
+        // keeps the two in step.
+        let cut = (to > from && self.under_chrome()).then(|| {
+            let radius = self
+                .ivars()
+                .views
+                .try_borrow()
+                .ok()
+                .and_then(|views| {
+                    views
+                        .values()
+                        .find_map(|host| host.view.layer().map(|layer| layer.cornerRadius()))
+                })
+                .unwrap_or(0.0);
+            let mask = CALayer::new();
+            mask.setBackgroundColor(Some(&NSColor::blackColor().CGColor()));
+            mask.setCornerRadius(radius);
+            // SAFETY: an immutable framework constant.
+            mask.setCornerCurve(unsafe { objc2_quartz_core::kCACornerCurveContinuous });
+            let bounds = self.bounds();
+            mask.setFrame(NSRect::new(
+                NSPoint::new(to - from, 0.0),
+                NSSize::new(frame.size.width, bounds.size.height),
+            ));
+            (
+                mask,
+                offset_animation(
+                    ns_string!("position.x"),
+                    0.0,
+                    from - to,
+                    SLIDE_SECONDS,
+                    true,
+                ),
+            )
+        });
         let stage = Weak::from_retained(&self.retain());
         let arrived = block2::RcBlock::new(move || {
             if let Some(stage) = stage.load() {
@@ -450,8 +490,29 @@ impl ContentStage {
         CATransaction::begin();
         // SAFETY: the block holds the stage weakly and runs on the main thread.
         unsafe { CATransaction::setCompletionBlock(Some(&arrived)) };
+        if let Some((mask, cut)) = cut {
+            CATransaction::setDisableActions(true);
+            // SAFETY: the mask is a fresh layer no other layer holds.
+            unsafe { layer.setMask(Some(&mask)) };
+            mask.addAnimation_forKey(&cut, Some(ns_string!("zephium.slide")));
+        }
         layer.addAnimation_forKey(&animation, Some(ns_string!("zephium.slide")));
         CATransaction::commit();
+    }
+
+    /// Whether the chrome is stacked over this stage, as it is while a hidden
+    /// sidebar's card is out.
+    fn under_chrome(&self) -> bool {
+        // SAFETY: retained parent access on the AppKit main thread.
+        let Some(parent) = (unsafe { self.superview() }) else {
+            return false;
+        };
+        let order: Vec<Retained<NSView>> = parent.subviews().to_vec();
+        let chrome = order
+            .iter()
+            .position(|view| view.downcast_ref::<wry::WryWebView>().is_some());
+        let stage = order.iter().position(|view| std::ptr::eq(&**view, &**self));
+        matches!((chrome, stage), (Some(chrome), Some(stage)) if chrome > stage)
     }
 
     /// Brings the stage back into view after a browser page covered it: it
@@ -506,6 +567,8 @@ impl ContentStage {
         }
         if let Some(layer) = self.layer() {
             layer.removeAnimationForKey(ns_string!("zephium.slide"));
+            // SAFETY: dropping a mask hands nothing on.
+            unsafe { layer.setMask(None) };
         }
         CATransaction::commit();
     }

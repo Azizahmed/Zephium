@@ -17,10 +17,10 @@ use windows::core::{BOOL, PCWSTR};
 use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, POINT, RECT, SIZE, WPARAM};
 use windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_USE_IMMERSIVE_DARK_MODE};
 use windows::Win32::Graphics::Gdi::{
-    ClientToScreen, CombineRgn, CreateCompatibleDC, CreateDIBSection, CreateRectRgn,
-    CreateRoundRectRgn, CreateSolidBrush, DeleteDC, DeleteObject, FillRect, GetDC, ReleaseDC,
-    SelectObject, SetWindowRgn, AC_SRC_ALPHA, AC_SRC_OVER, BITMAPINFO, BITMAPINFOHEADER, BI_RGB,
-    BLENDFUNCTION, DIB_RGB_COLORS, HDC, RGN_AND,
+    ClientToScreen, CombineRgn, CreateCompatibleDC, CreateDIBSection, CreateRoundRectRgn,
+    CreateSolidBrush, DeleteDC, DeleteObject, FillRect, GetDC, ReleaseDC, SelectObject,
+    SetWindowRgn, AC_SRC_ALPHA, AC_SRC_OVER, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, BLENDFUNCTION,
+    DIB_RGB_COLORS, HDC, RGN_AND,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
@@ -230,6 +230,9 @@ struct Slide {
     /// Horizontal offset in logical pixels, at the start and at the end.
     from: f64,
     to: f64,
+    /// It set off from under a hidden sidebar's card, which the page gives
+    /// way to as it travels.
+    beside: bool,
 }
 
 /// The chrome's --motion-page, so the page and the sidebar travel together.
@@ -483,6 +486,7 @@ impl Stage {
                             size: (r.width, r.height),
                             from: s.origin.0 - r.x,
                             to: 0.0,
+                            beside: s.card.is_some(),
                         }
                     } else {
                         // Narrower: keep the old size for the journey.
@@ -492,6 +496,7 @@ impl Stage {
                             size: s.size,
                             from: 0.0,
                             to: r.x - s.origin.0,
+                            beside: s.card.is_some(),
                         }
                     })
                 }
@@ -1399,6 +1404,7 @@ fn sync(state: &Rc<RefCell<State>>) {
         preview,
         caption_offset,
         caption_moving,
+        cut,
     ) = {
         let Ok(mut state) = state.try_borrow_mut() else {
             return;
@@ -1430,8 +1436,30 @@ fn sync(state: &Rc<RefCell<State>>) {
             .and_then(|slide| slide.offset(Instant::now()).map(|offset| (slide, offset)));
         if travelling.is_none() && state.slide.take().is_some() {
             let visible = state.visible.clone();
+            // Home, a page cut on its way takes its own whole shape again.
+            for id in &visible {
+                if let Some(view) = state.views.get(id) {
+                    let mut applied = view.applied.get();
+                    applied.rounded = None;
+                    view.applied.set(applied);
+                }
+            }
             state.dirty.extend(visible);
         }
+        // Travelling right from under a hidden sidebar's card, the stage gives
+        // way to the column the card becomes: its pages are cut at its new
+        // edge, which stays put while they slide out past it, so no page
+        // shows where the column now stands.
+        let cut = travelling
+            .filter(|(slide, _)| slide.beside && slide.to > slide.from)
+            .map(|(slide, _)| {
+                (
+                    slide.origin.0 + slide.to,
+                    slide.origin.1,
+                    slide.size.0 - slide.to,
+                    slide.size.1,
+                )
+            });
         let dirty = std::mem::take(&mut state.dirty);
         if dirty.is_empty() {
             return;
@@ -1460,6 +1488,7 @@ fn sync(state: &Rc<RefCell<State>>) {
                 state.caption_offset
             },
             state.caption_moving && state.fullscreen.is_none(),
+            cut,
         )
     };
     let sliding = caption_moving || offset != 0.0 || preview.is_some_and(|(_, _, moving)| moving);
@@ -1553,15 +1582,19 @@ fn sync(state: &Rc<RefCell<State>>) {
     if state.borrow().revision != revision {
         return;
     }
-    if preview.is_some() || caption_offset > 0.0 {
+    if preview.is_some() || caption_offset > 0.0 || cut.is_some() {
+        let (x, y, width, height) = cut.unwrap_or((origin.0, origin.1, size.0, size.1));
         let stage = (
-            (origin.0 * scale).round() as i32,
-            (origin.1 * scale).round() as i32,
-            (size.0 * scale).round() as i32,
-            (size.1 * scale).round() as i32,
+            (x * scale).round() as i32,
+            (y * scale).round() as i32,
+            (width * scale).round() as i32,
+            (height * scale).round() as i32,
         );
         for (id, rect) in &pane_rects {
-            if caption_offset > 0.0 || preview.is_some_and(|(shifted, _, _)| shifted == *id) {
+            if caption_offset > 0.0
+                || cut.is_some()
+                || preview.is_some_and(|(shifted, _, _)| shifted == *id)
+            {
                 clip_to_stage(state, *id, *rect, stage, radius);
             }
         }
@@ -1741,7 +1774,8 @@ fn step_card(state: &Rc<RefCell<State>>) {
     }
 }
 
-/// Narrows a page's rounded region to the part of it inside the stage.
+/// Narrows a page's rounded region to the part of it inside the stage, which
+/// is rounded too, so a page cut by the stage's edge keeps its corners there.
 fn clip_to_stage(
     state: &Rc<RefCell<State>>,
     id: ItemId,
@@ -1774,7 +1808,14 @@ fn clip_to_stage(
             radius,
             radius,
         );
-        let inside = CreateRectRgn(left, top, right, bottom);
+        let inside = CreateRoundRectRgn(
+            left,
+            top,
+            right.saturating_add(1),
+            bottom.saturating_add(1),
+            radius,
+            radius,
+        );
         if !rounded.0.is_null() && !inside.0.is_null() {
             let _ = CombineRgn(Some(rounded), Some(rounded), Some(inside), RGN_AND);
             if SetWindowRgn(view.container, Some(rounded), true) == 0 {
