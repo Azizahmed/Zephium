@@ -87,8 +87,9 @@ existing install on its current version.
    git push origin v1.0.0-beta.1
    ```
 
-6. **Review the draft** once the workflow finishes: install the DMG and the
-   Windows installer, check the notes, then **Publish**. Keep "Set as the
+6. **Review the draft** once the workflow finishes. For a stable version,
+   review the final assets below and use **Publish stable draft**. For a prerelease,
+   install the DMG and Windows installer and review the notes before publication. Keep "Set as the
    latest release" checked and leave "Set as a pre-release" unchecked, even for
    betas: `releases/latest` skips pre-releases, and both the website and the
    updater resolve through it.
@@ -126,6 +127,21 @@ platform signing, updater signatures and provenance on the shipping platforms.
 Hosted checks provide source/API coverage; retain useful device results with the
 candidate commit and artifact hashes so a rebuild cannot be mistaken for the
 bytes reviewed.
+
+For a stable `vMAJOR.MINOR.PATCH`, dispatch **Publish stable draft** with the
+existing annotated tag. It requires successful main-push CI and a successful
+Release run from that tag for the same commit. The Release run has already gated
+components, or recorded the explicit emergency bypass. The publisher downloads
+the existing draft's assets and verifies the DMG, macOS updater archive and
+Windows installer attestations against that commit and `release.yml` before
+publishing. It never builds or replaces assets. Release and publication share a
+same-tag workflow lock, and publication jobs serialize their latest-release check
+and edit across tags. A stable draft becomes latest only when its canonical
+semantic version is newer than the current latest stable release; equal or older
+versions explicitly use `--latest=false`. An absent latest release (HTTP 404)
+allows the first stable promotion; other lookup errors or malformed latest tags
+stop publication. Maintainers can also publish
+reviewed drafts through GitHub's release UI.
 
 ## Published assets
 
