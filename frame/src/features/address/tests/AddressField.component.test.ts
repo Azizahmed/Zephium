@@ -68,17 +68,12 @@ async function field(props: { compact?: boolean } = {}) {
   return { screen, input };
 }
 
-test("a click on a page's address edits it in the launcher, not the field", async () => {
+test("a click on a page's address edits it here, and only the shortcut opens the launcher", async () => {
   const { screen, input } = await field();
   await screen.getByRole("textbox", { name: /address/iu }).click();
-  await vi.waitFor(() =>
-    expect(native.edit).toHaveBeenCalledWith(
-      tabs.activeId(),
-      "https://www.wikipedia.org/wiki/Premium",
-    ),
-  );
-  expect(document.activeElement).not.toBe(input);
-  expect(input.value).toBe("www.wikipedia.org");
+  expect(document.activeElement).toBe(input);
+  await expect.poll(() => input.value).toBe("https://www.wikipedia.org/wiki/Premium");
+  expect(native.edit).not.toHaveBeenCalled();
 });
 
 test("editing shows the whole address and rests on the host", async () => {

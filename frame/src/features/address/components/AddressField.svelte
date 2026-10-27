@@ -116,9 +116,9 @@
       : null,
   );
 
-  /** A page's address is edited in the launcher, which has room for what a
-   *  sidebar-wide field cannot show; the field stays the page's identity.
-   *  False where there is no page to edit and the field takes the typing. */
+  /** ⌘L edits a page's address in the launcher, which has room for what a
+   *  sidebar-wide field cannot show; a click edits it here. False where
+   *  there is no page to edit and the field takes the typing. */
   function editInLauncher(): boolean {
     const tab = tabs.activeTab();
     if (!tab?.url || (tab.content ?? "web") !== "web") return false;
@@ -268,19 +268,10 @@
     convention. The message is announced rather than drawn: a block of text
     appearing under the address bar would push the whole chrome down.
   -->
-  <!-- svelte-ignore a11y_no_static_element_interactions: the press only
-       routes a pointer to the launcher; the keyboard edits in the field. -->
   <div
     class:sr-only={compact}
     class:flex={!compact}
     class:shadow-[inset_0_0_0_1px_var(--color-danger)]={failed}
-    onpointerdown={(event) => {
-      // A click on the address opens the launcher; the field's own buttons
-      // and a field already being typed in keep their clicks.
-      if (event.button !== 0 || editing || finding) return;
-      if (event.target instanceof Element && event.target.closest("button, a")) return;
-      if (editInLauncher()) event.preventDefault();
-    }}
     class="address-field h-[34px] items-center gap-2 rounded-row bg-address ps-2.5 pe-1 shadow-[var(--shadow-tile)] transition-[background-color,box-shadow] duration-[var(--motion-fast)] ease-[var(--ease-out)] [--address-centering:20px] focus-within:bg-address-hover focus-within:shadow-[var(--shadow-field-focus)] hover:bg-address-hover"
   >
     {#if !compact && activeCapture && !editing}
