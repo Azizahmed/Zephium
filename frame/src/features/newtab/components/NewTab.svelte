@@ -23,7 +23,15 @@
   import { layout, type Box } from "../lib/layout";
   import { WORDMARK } from "$shared/lib/wordmark";
   import { reducedMotion } from "$shared/lib/motion";
-  import { decode, placeSky, SCENES, scene as skyScene, seen, type Scene } from "$shared/sky";
+  import {
+    decode,
+    FROSTS,
+    placeSky,
+    SCENES,
+    scene as skyScene,
+    seen,
+    type Scene,
+  } from "$shared/sky";
   import NewTabAccount from "./NewTabAccount.svelte";
 
   let {
@@ -258,9 +266,14 @@
 <section
   class="newtab"
   class:arriving
+  class:entering={!arriving}
   data-scene={scene}
   data-ready={shown === scene}
   aria-label={m.new_tab()}
+  style:--sky-frost={`url("${FROSTS[scene]}")`}
+  style:--sky-frost-size={`${sky.w}px ${sky.h}px`}
+  style:--sky-frost-x={`${sky.x - (width - fieldWidth) / 2}px`}
+  style:--sky-frost-y={`${sky.y - page.notch.height}px`}
   bind:clientWidth={width}
   bind:clientHeight={height}
 >
@@ -317,6 +330,15 @@
     <use class="name" href={`#${id}-letters`} />
     {#if glint}<use href={`#${id}-letters`} fill={`url(#${id}-glint)`} />{/if}
   </svg>
+
+  <!-- The band the field hangs in is the window's title bar: beside the
+       field, it moves the window. -->
+  <div
+    class="drag"
+    data-tauri-drag-region
+    aria-hidden="true"
+    style:height={`${page.notch.height}px`}
+  ></div>
 
   <div class="field" style:width={`${fieldWidth}px`} style:height={`${page.notch.height}px`}>
     {@render search()}
@@ -413,6 +435,9 @@
     --sky-lip: var(--sky-day-lip);
     --disc-fill: var(--sky-day-disc-fill);
     --disc-rim: var(--sky-day-disc-rim);
+    --sky-card: var(--sky-day-card);
+    --sky-card-rim: var(--sky-day-card-rim);
+    --sky-card-edge: var(--sky-day-card-edge);
 
     position: relative;
     block-size: 100%;
@@ -428,6 +453,9 @@
     --sky-lip: var(--sky-night-lip);
     --disc-fill: var(--sky-night-disc-fill);
     --disc-rim: var(--sky-night-disc-rim);
+    --sky-card: var(--sky-night-card);
+    --sky-card-rim: var(--sky-night-card-rim);
+    --sky-card-edge: var(--sky-night-card-edge);
   }
 
   :global(:root:not([data-material="none"])[data-material]) .newtab {
@@ -479,6 +507,13 @@
 
   .glint {
     stop-color: var(--sky-glint);
+  }
+
+  .drag {
+    position: absolute;
+    z-index: 1;
+    inset-block-start: 0;
+    inset-inline: 0;
   }
 
   /* The field fills the notch: the window's glass is its material. */
@@ -716,6 +751,42 @@
     opacity: 0;
   }
 
+  /* Every new tab after the first comes up out of its own horizon: the
+     picture settles in as the window turns to the sky, and the name rises
+     out of the dots into focus, with the time a beat behind it. */
+  .entering .page {
+    animation: settle 320ms var(--ease-out) backwards;
+  }
+
+  .entering .mark {
+    animation: rise 720ms var(--ease-emphasized) 40ms backwards;
+  }
+
+  .entering :is(.greeting, .when) {
+    animation: rise-after 640ms var(--ease-emphasized) 120ms backwards;
+  }
+
+  @keyframes settle {
+    from {
+      opacity: 0;
+    }
+  }
+
+  @keyframes rise {
+    from {
+      opacity: 0;
+      filter: blur(8px);
+      translate: 0 18px;
+    }
+  }
+
+  @keyframes rise-after {
+    from {
+      opacity: 0;
+      translate: 0 10px;
+    }
+  }
+
   @keyframes arrive {
     from {
       opacity: 0;
@@ -738,7 +809,8 @@
   }
 
   @media (prefers-reduced-motion: reduce) {
-    .figure {
+    .figure,
+    .entering :is(.page, .mark, .greeting, .when) {
       animation: none;
     }
 
@@ -748,7 +820,7 @@
     }
   }
 
-  :global(:root[data-reduce-motion="true"]) .figure {
+  :global(:root[data-reduce-motion="true"]) :is(.figure, .entering .page, .entering .mark, .entering .greeting, .entering .when) {
     animation: none;
   }
 
