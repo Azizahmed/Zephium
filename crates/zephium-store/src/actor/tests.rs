@@ -4467,3 +4467,139 @@ fn imported_history_keeps_its_times_and_is_not_added_twice() {
     );
     assert_eq!(hub.import_history(ProfileId::from(99), &visits), None);
 }
+
+#[test]
+fn an_idle_store_expires_its_backup_without_a_command_or_session_save() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = SessionState::default();
+    Hub::open(dir.path().to_path_buf())
+        .unwrap()
+        .save(&state)
+        .unwrap();
+    let meta = Connection::open(dir.path().join("meta.sqlite")).unwrap();
+    meta.execute(
+        "INSERT INTO session_snapshot_backup VALUES (1, ?1, 1, ?2)",
+        params![
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs() as i64
+                - 30 * 24 * 3600
+                + 2,
+            serde_json::to_vec(&state).unwrap()
+        ],
+    )
+    .unwrap();
+    let store = SqliteStore::open(dir.path()).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let remaining: i64 = meta
+            .query_row("SELECT count(*) FROM session_snapshot_backup", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        if remaining == 0 {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "idle expiry requires no mailbox command"
+        );
+        thread::sleep(Duration::from_millis(10));
+    }
+    drop(store);
+}
+
+#[test]
+fn session_backup_disposal_reports_committed_failure_and_retries() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = SqliteStore::open(dir.path()).unwrap();
+    let profile = ProfileId::from(1);
+    let state = SessionState {
+        profiles: vec![PersistedProfile {
+            id: profile,
+            name: "P".into(),
+            kind: ProfileKind::Default,
+        }],
+        ..Default::default()
+    };
+    store.save_session(state.clone());
+    let (tx, rx) = mpsc::channel();
+    assert!(store.discard_session_backup(
+        profile,
+        Box::new(move |ok| {
+            tx.send(ok).unwrap();
+        })
+    ));
+    assert!(
+        rx.recv_timeout(REPLY_TIMEOUT).unwrap(),
+        "first-run session is published before disposal"
+    );
+    let meta = Connection::open(dir.path().join("meta.sqlite")).unwrap();
+    meta.execute(
+        "INSERT INTO session_snapshot_backup VALUES (1, ?1, 1, ?2)",
+        params![
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs() as i64,
+            serde_json::to_vec(&state).unwrap()
+        ],
+    )
+    .unwrap();
+    meta.execute_batch("CREATE TRIGGER fail_backup_delete BEFORE DELETE ON session_snapshot_backup BEGIN SELECT RAISE(ABORT, 'fixture write failure'); END;").unwrap();
+    let (tx, rx) = mpsc::channel();
+    assert!(store.discard_session_backup(
+        profile,
+        Box::new(move |ok| {
+            tx.send(ok).unwrap();
+        })
+    ));
+    assert!(!rx.recv_timeout(REPLY_TIMEOUT).unwrap());
+    meta.execute_batch("DROP TRIGGER fail_backup_delete")
+        .unwrap();
+    let (tx, rx) = mpsc::channel();
+    assert!(store.discard_session_backup(
+        profile,
+        Box::new(move |ok| {
+            tx.send(ok).unwrap();
+        })
+    ));
+    assert!(rx.recv_timeout(REPLY_TIMEOUT).unwrap());
+    assert_eq!(
+        meta.query_row("SELECT count(*) FROM session_snapshot_backup", [], |r| r
+            .get::<_, i64>(0))
+            .unwrap(),
+        0
+    );
+}
+
+#[test]
+fn panicking_session_backup_completion_does_not_stop_store() {
+    let store = SqliteStore::in_memory().unwrap();
+    let state = sample();
+    let profile = state.profiles[0].id;
+    store.save_session(state);
+    assert!(store.discard_session_backup(profile, Box::new(|_| panic!("fixture completion panic"))));
+    assert!(matches!(store.load_session(), SessionLoad::Loaded { .. }));
+}
+
+#[test]
+fn checked_history_forget_drains_failed_pending_visits_before_erasure() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut hub = Hub::open(dir.path().to_path_buf()).unwrap();
+    let state = sample();
+    let profile = state.profiles[0].id;
+    hub.save(&state).unwrap();
+    hub.history_page(profile, "", None, None, 10);
+    let observer = Connection::open(dir.path().join(format!("profile-{profile}.sqlite"))).unwrap();
+    observer.execute_batch("CREATE TRIGGER fail_visit BEFORE INSERT ON history BEGIN SELECT RAISE(ABORT, 'fixture write failure'); END;").unwrap();
+    let store = SqliteStore::spawn(hub).unwrap();
+    let urls = vec!["https://forget.example/".to_owned()];
+    store.record_visit(profile, urls[0].clone(), "Example".into());
+    assert_eq!(store.forget_history_urls_checked(profile, &urls), None);
+    observer.execute_batch("DROP TRIGGER fail_visit").unwrap();
+    assert_eq!(store.forget_history_urls_checked(profile, &urls), Some(1));
+    assert!(store.flush_until(Instant::now() + REPLY_TIMEOUT));
+    assert!(store.history_page(profile, "", None, None, 10).is_empty());
+}

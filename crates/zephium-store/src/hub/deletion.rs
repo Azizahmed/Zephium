@@ -225,9 +225,28 @@ impl Hub {
             ));
         }
 
+        // Retire backup WAL frames while the durable deletion obligations
+        // still exist. A busy checkpoint leaves all journal rows retryable.
+        let tx = self.meta.transaction()?;
+        for (profile, _, absent) in &resolutions {
+            if *absent {
+                session::discard_profile_backup(&tx, *profile)?;
+            }
+        }
+        tx.commit()?;
+        let checkpoint_complete = match session::checkpoint_session_backup(&self.meta) {
+            Ok(()) => true,
+            Err(error) => {
+                // Keep startup available while the existing deletion recovery
+                // queue retries local cleanup with native proof intact. Only
+                // checkpoint errors take this path; journal writes still fail.
+                eprintln!("store: session backup checkpoint deferred: {error}");
+                false
+            }
+        };
         let tx = self.meta.transaction()?;
         for (profile, prior_process, absent) in resolutions {
-            let changed = if absent {
+            let changed = if absent && checkpoint_complete {
                 tx.execute(
                     "DELETE FROM profile_deletion_journal
                      WHERE profile_id = ?1
@@ -236,9 +255,9 @@ impl Hub {
                     params![profile.to_string(), prior_process.to_string()],
                 )?
             } else {
-                // The filesystem did not preserve the prior unlink across
-                // restart. Keep native proof, reopen only the idempotent local
-                // phase, and retain the original deletion authorization.
+                // Either the filesystem did not preserve the prior unlink,
+                // or old recovery bytes remain pinned in the WAL. Keep native
+                // proof and reopen only the idempotent local cleanup phase.
                 tx.execute(
                     "UPDATE profile_deletion_journal
                      SET local_unlink_process = NULL
@@ -405,8 +424,13 @@ impl Hub {
             return Err(invalid_data("injected failure after local profile purge"));
         }
 
+        let tx = self.meta.transaction()?;
+        session::discard_profile_backup(&tx, profile)?;
+        tx.commit()?;
+        session::checkpoint_session_backup(&self.meta)?;
+        let tx = self.meta.transaction()?;
         let changed = if require_restart_confirmation {
-            self.meta.execute(
+            tx.execute(
                 "UPDATE profile_deletion_journal
                  SET local_unlink_process = ?2
                  WHERE profile_id = ?1
@@ -418,7 +442,7 @@ impl Hub {
                 ],
             )?
         } else {
-            self.meta.execute(
+            tx.execute(
                 "DELETE FROM profile_deletion_journal
                  WHERE profile_id = ?1 AND native_erasure_verified = 1",
                 [profile.to_string()],
@@ -429,6 +453,7 @@ impl Hub {
                 "profile deletion journal changed during completion",
             ));
         }
+        tx.commit()?;
         self.degraded_profiles.remove(&profile);
         Ok(true)
     }

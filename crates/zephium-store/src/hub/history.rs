@@ -338,14 +338,30 @@ impl Hub {
 
     /// Removes every visit to each address. Forgetting one entry in a history
     /// list means forgetting the page, not one of the times it was opened.
+    #[cfg(test)]
     pub(crate) fn forget_history_urls(&mut self, profile: ProfileId, urls: &[String]) -> u32 {
+        self.forget_history_urls_checked(profile, urls)
+            .unwrap_or_default()
+    }
+
+    pub(crate) fn forget_history_urls_checked(
+        &mut self,
+        profile: ProfileId,
+        urls: &[String],
+    ) -> Option<u32> {
         if !self.registry.contains(&profile)
             || self.degraded_profiles.contains(&profile)
             || self.recovery_required.is_some()
             || urls.is_empty()
             || urls.len() > MAX_HISTORY_FORGET_URLS
         {
-            return 0;
+            return None;
+        }
+        if let Err(error) = self.discard_session_backup(profile) {
+            eprintln!(
+                "store: forget_history backup disposal failed for profile {profile}: {error}"
+            );
+            return None;
         }
         let result = self.profile_conn(profile).and_then(|conn| {
             let tx = conn.transaction()?;
@@ -368,10 +384,10 @@ impl Hub {
             Ok(removed)
         });
         match result {
-            Ok(removed) => u32::try_from(removed).unwrap_or(u32::MAX),
+            Ok(removed) => Some(u32::try_from(removed).unwrap_or(u32::MAX)),
             Err(e) => {
                 eprintln!("store: forget_history_urls failed for profile {profile}: {e}");
-                0
+                None
             }
         }
     }
@@ -392,6 +408,10 @@ impl Hub {
             || self.degraded_profiles.contains(&profile)
             || self.recovery_required.is_some()
         {
+            return None;
+        }
+        if let Err(error) = self.discard_session_backup(profile) {
+            eprintln!("store: clear_history backup disposal failed for profile {profile}: {error}");
             return None;
         }
         let result = self.profile_conn(profile).and_then(|conn| {

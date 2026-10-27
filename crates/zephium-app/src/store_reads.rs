@@ -976,13 +976,18 @@ fn run_with(
                         removed: None,
                     }
                 }
-                zephium_ipc::HistoryCall::Forget { urls } => StoreReadResult::HistorySurface {
-                    token,
-                    profile,
-                    visits: Vec::new(),
-                    next: None,
-                    removed: Some(store.forget_history_urls(profile, &urls)),
-                },
+                zephium_ipc::HistoryCall::Forget { urls } => {
+                    match store.forget_history_urls_checked(profile, &urls) {
+                        Some(removed) => StoreReadResult::HistorySurface {
+                            token,
+                            profile,
+                            visits: Vec::new(),
+                            next: None,
+                            removed: Some(removed),
+                        },
+                        None => StoreReadResult::HistorySurfaceFailed { token, profile },
+                    }
+                }
                 call @ (zephium_ipc::HistoryCall::Clear { .. }
                 | zephium_ipc::HistoryCall::ClearSince { .. }) => {
                     let since = match call {
@@ -1106,6 +1111,30 @@ fn run_with(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_failed_checked_history_forget_delivers_failure_instead_of_removed_zero() {
+        let store: SharedStore = Arc::new(zephium_store::SqliteStore::in_memory().unwrap());
+        let profile = ProfileId::from(777);
+        let queue = StoreReadQueue::new();
+        assert!(queue.request_history_call(
+            43,
+            profile,
+            zephium_ipc::HistoryCall::Forget {
+                urls: vec!["https://example.test/".into()]
+            }
+        ));
+        let mut result = None;
+        let stop = queue.clone();
+        run_with(store, queue, |reply| {
+            result = Some(reply);
+            stop.stop();
+            false
+        });
+        assert!(
+            matches!(result, Some(StoreReadResult::HistorySurfaceFailed { token: 43, profile: owner }) if owner == profile)
+        );
+    }
 
     #[test]
     fn a_failed_checked_history_clear_delivers_failure_instead_of_removed_zero() {

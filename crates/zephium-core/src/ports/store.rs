@@ -547,6 +547,11 @@ pub trait Store {
     ) -> Vec<HistoryVisit>;
     /// Removes every visit to each address; returns how many rows went.
     fn forget_history_urls(&self, profile: ProfileId, urls: &[String]) -> u32;
+    /// `None` means the deletion or recovery-copy disposal failed. Zero is
+    /// a successful deletion with no matching visits.
+    fn forget_history_urls_checked(&self, profile: ProfileId, urls: &[String]) -> Option<u32> {
+        Some(self.forget_history_urls(profile, urls))
+    }
     /// Visits from another browser, kept with their own times. A visit
     /// already present at the same time is skipped, so importing again adds
     /// only what is new. Returns how many were added, or None when the
@@ -625,6 +630,16 @@ pub trait Store {
     /// successful, distinct result. Legacy stores retain their old contract.
     fn clear_history_checked(&self, profile: ProfileId, since: Option<i64>) -> Option<u32> {
         Some(self.clear_history(profile, since))
+    }
+    /// Disposes recovery copies that may contain this profile's browsing
+    /// data. False means queue refusal, with no completion; admitted calls
+    /// report whether disposal committed. Call for site-data erasure too.
+    fn discard_session_backup(
+        &self,
+        _profile: ProfileId,
+        _done: Box<dyn FnOnce(bool) + Send>,
+    ) -> bool {
+        false
     }
     /// Replaces the placeholder title on the newest recent visit to an address.
     fn amend_visit_title(&self, profile: ProfileId, url: String, title: String) -> bool;
