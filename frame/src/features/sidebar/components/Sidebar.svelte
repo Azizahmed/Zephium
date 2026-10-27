@@ -172,6 +172,9 @@
   let aside = $state<HTMLElement>();
   let peeking = $state(false);
   let atEdge = false;
+  /** Windows cannot blend the chrome over a page, so it cuts the chrome to
+   *  the card: the card is there or not, and does not slide. */
+  const CUT_TO_CARD = IS_WINDOWS;
   /** Once out, the card stays a moment whatever the pointer does: it is
    *  still arriving, and a hand settling onto it should not send it back. */
   const SETTLE_MS = 520;
@@ -188,6 +191,17 @@
     if (!peeking) opened = performance.now();
     if (peeking) {
       void commands.sidebarPeek(true, true);
+      return;
+    }
+    if (CUT_TO_CARD) {
+      // Cut to the card, the chrome shows only what is drawn there, so the
+      // card is in place before it is brought over the page.
+      peeking = true;
+      requestAnimationFrame(() =>
+        requestAnimationFrame(() => {
+          if (away && peeking) void commands.sidebarPeek(true, true);
+        }),
+      );
       return;
     }
     // Native stacks the chrome over the page before the card slides in, so
@@ -212,6 +226,15 @@
     linger = setTimeout(
       () => {
         if (pointerIn || atEdge || needed()) return;
+        if (CUT_TO_CARD) {
+          // Beneath the page first, so the card is never seen leaving its cut.
+          void commands.sidebarPeek(false, false);
+          lowered = setTimeout(() => {
+            lowered = undefined;
+            peeking = false;
+          }, 80);
+          return;
+        }
         peeking = false;
         // The controls go as the card starts to; the chrome goes back beneath
         // the page once the card has slid away.
@@ -371,7 +394,7 @@
   bind:this={aside}
   data-hidden={away || undefined}
   data-peek={(away && peeking) || undefined}
-  data-armed={(away && armed) || undefined}
+  data-armed={(away && armed && !CUT_TO_CARD) || undefined}
   data-leaving={leaving ? true : undefined}
   style:left={leaving ? `${leaving.left}px` : undefined}
   style:top={leaving ? `${leaving.top}px` : undefined}

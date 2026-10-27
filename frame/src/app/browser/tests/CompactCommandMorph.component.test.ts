@@ -12,8 +12,6 @@ import * as launch from "$session/motion.svelte";
 import * as sidebar from "$session/sidebar-mode.svelte";
 import Shell from "../Shell.svelte";
 
-// The toggle puts the column into the rail where it cannot hide yet.
-vi.mock("$shared/platform", () => ({ IS_MAC: false, IS_WINDOWS: true }));
 vi.mock("$shared/ipc/bindings", async () => {
   const { mockBindings } = await import("$shared/testing/bindings");
   return mockBindings({
@@ -35,13 +33,11 @@ afterEach(() => {
 });
 const frame = () => new Promise((r) => requestAnimationFrame(() => r(null)));
 
-test("the compact command carries the kept sites both ways, as a click does", async () => {
+test("going to the rail and back carries the kept sites both ways", async () => {
   await page.viewport(268, 700);
   launch.dispose();
   await surface.init();
   await tabs.init();
-  const { uiCommands } = await import("$domain/ui-commands");
-  await uiCommands.init();
   const all = ["a", "b", "k1", "k2", "k3"].map((id) => tabFixture({ id, title: `Tab ${id}` }));
   const nodes = all.map((tab) => ({
     id: tab.id,
@@ -67,7 +63,8 @@ test("the compact command carries the kept sites both ways, as a click does", as
       .querySelector(".sidebar-columns > .sidebar-browser-column:not([aria-hidden])")!
       .querySelector<HTMLElement>('[data-motion-key="tab:k3"]')!;
 
-  emitNativeEvent("uiCommand", "sidebar.toggleCompact");
+  // The rail is the shape Work, Tasks and the tools give the column.
+  sidebar.setMode("compact");
   await frame();
   await frame();
   expect(kept().getAnimations().length).toBeGreaterThan(0);
@@ -75,7 +72,7 @@ test("the compact command carries the kept sites both ways, as a click does", as
   await page.viewport(64, 700);
   await new Promise((resolve) => setTimeout(resolve, 600));
 
-  emitNativeEvent("uiCommand", "sidebar.toggleCompact");
+  sidebar.setMode("default");
   await frame();
   await frame();
   expect(kept().getAnimations().length).toBeGreaterThan(0);
