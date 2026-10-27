@@ -525,9 +525,10 @@ export const commands = {
 	sidebarSetHidden: (hidden: boolean) => __TAURI_INVOKE<void>("sidebar_set_hidden", { hidden }),
 	/**
 	 *  Brings a hidden sidebar over the page while the pointer wants it, or puts
-	 *  it back beneath. The window controls ride with it.
+	 *  it back beneath. The window controls show with the card, and leave the
+	 *  moment it starts to go rather than once it has.
 	 */
-	sidebarPeek: (peek: boolean) => __TAURI_INVOKE<void>("sidebar_peek", { peek }),
+	sidebarPeek: (peek: boolean, lights: boolean) => __TAURI_INVOKE<void>("sidebar_peek", { peek, lights }),
 	/**
 	 *  Shows the Zephium sky over the window's glass for a new tab, or fades it
 	 *  to the glass for anything else.

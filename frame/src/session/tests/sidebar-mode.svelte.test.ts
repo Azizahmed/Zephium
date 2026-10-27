@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 
 const native = vi.hoisted(() => ({
-  width: vi.fn(async () => undefined),
-  hidden: vi.fn(async () => undefined),
+  width: vi.fn(async (_width: number | null, _travel: boolean, _revision: number | null) => {}),
+  hidden: vi.fn(async (_hidden: boolean) => {}),
 }));
 
 vi.mock("$shared/ipc/bindings", async () => {

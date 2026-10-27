@@ -4,6 +4,7 @@
   import { IS_MAC, IS_WINDOWS } from "$shared/platform";
   import * as motion from "$session/motion.svelte";
   import { surface as browserPage } from "$domain/surface";
+  import { tabs } from "$domain/tabs";
   import * as tools from "$session/tools.svelte";
   import { untrack } from "svelte";
   import {
@@ -73,28 +74,63 @@
   });
 
   // Hidden, the column waits off to the side, beneath the page, and comes
-  // over it as a card while the pointer rests on the window's left edge.
+  // over it as a card as the pointer reaches the window's left edge. The
+  // page's own view takes the pointer there, so native watches the edge.
   let hidden = $derived(isHidden());
+  // A page hides the column by sliding over it, so the column keeps its
+  // shape until it is covered and only then becomes the card; anything the
+  // chrome draws itself has nothing to slide, and lets the column go at once.
+  let overPage = $derived(
+    browserPage.currentPage() === null && !!tabs.activeTab()?.url && !tabs.activeTab()?.loading,
+  );
+  let away = $state(isHidden());
+  $effect(() => {
+    if (!hidden) {
+      away = false;
+      return;
+    }
+    if (untrack(() => away)) return;
+    if (!untrack(() => overPage) || reducedMotion()) {
+      away = true;
+      return;
+    }
+    const covered = setTimeout(() => (away = true), duration("page"));
+    return () => clearTimeout(covered);
+  });
+  // The column becomes the card already out of sight: only from the next
+  // frame on does the card slide, so it never crosses the window's gutter.
+  let armed = $state(false);
+  $effect(() => {
+    if (!away) {
+      armed = false;
+      return;
+    }
+    let live = true;
+    requestAnimationFrame(() => requestAnimationFrame(() => live && (armed = true)));
+    return () => {
+      live = false;
+    };
+  });
   let aside = $state<HTMLElement>();
   let peeking = $state(false);
-  /** The pointer has to rest on the edge a moment, so crossing it on the way
-   *  to the page's own left edge does not bring the column out. */
-  const DWELL_MS = 70;
+  let atEdge = false;
   /** Leaving the card gives it a moment: a pointer overshooting its edge
-   *  and coming back should not see it go and return. */
-  const LINGER_MS = 320;
-  let dwell: ReturnType<typeof setTimeout> | undefined;
+   *  and coming straight back should not see it go and return. */
+  const LINGER_MS = 180;
   let linger: ReturnType<typeof setTimeout> | undefined;
   let lowered: ReturnType<typeof setTimeout> | undefined;
   function peek() {
     clearTimeout(linger);
     clearTimeout(lowered);
-    if (peeking) return;
+    if (peeking) {
+      void commands.sidebarPeek(true, true);
+      return;
+    }
     // Native stacks the chrome over the page before the card slides in, so
     // the slide is seen from its first frame.
-    void commands.sidebarPeek(true).then(() =>
+    void commands.sidebarPeek(true, true).then(() =>
       requestAnimationFrame(() => {
-        if (hidden) peeking = true;
+        if (away) peeking = true;
       }),
     );
   }
@@ -109,24 +145,35 @@
   function release() {
     clearTimeout(linger);
     linger = setTimeout(() => {
-      if (pointerIn || needed()) return;
+      if (pointerIn || atEdge || needed()) return;
       peeking = false;
-      // Beneath the page again only once the card has slid away.
-      lowered = setTimeout(() => void commands.sidebarPeek(false), duration("page"));
+      // The controls go as the card starts to; the chrome goes back beneath
+      // the page once the card has slid away.
+      void commands.sidebarPeek(true, false);
+      lowered = setTimeout(() => void commands.sidebarPeek(false, false), duration("page"));
     }, LINGER_MS);
   }
   $effect(() => {
-    if (hidden) return;
-    clearTimeout(dwell);
+    const edge = (event: Event) => {
+      if (!(event instanceof CustomEvent) || typeof event.detail?.near !== "boolean") return;
+      atEdge = event.detail.near;
+      if (!away) return;
+      if (atEdge) peek();
+      else if (peeking && !pointerIn) release();
+    };
+    window.addEventListener("zephium:sidebar-edge", edge);
+    return () => window.removeEventListener("zephium:sidebar-edge", edge);
+  });
+  $effect(() => {
+    if (away) return;
     clearTimeout(linger);
     clearTimeout(lowered);
     untrack(() => {
-      if (peeking) void commands.sidebarPeek(false);
+      if (peeking) void commands.sidebarPeek(false, false);
       peeking = false;
     });
   });
   $effect(() => () => {
-    clearTimeout(dwell);
     clearTimeout(linger);
     clearTimeout(lowered);
   });
@@ -244,22 +291,12 @@
   }
 </script>
 
-{#if hidden}<!-- The window's left gutter, the one edge of the page's surround the
-     chrome still owns while the column is away. -->
-  <div
-    class="peek-edge"
-    aria-hidden="true"
-    onpointerenter={() => {
-      clearTimeout(dwell);
-      dwell = setTimeout(peek, DWELL_MS);
-    }}
-    onpointerleave={() => clearTimeout(dwell)}
-  ></div>{/if}
 <aside
   bind:this={aside}
-  data-hidden={hidden || undefined}
-  data-peek={(hidden && peeking) || undefined}
-  style:--sidebar-frost={hidden ? `url("${FROSTS[scene()]}")` : undefined}
+  data-hidden={away || undefined}
+  data-peek={(away && peeking) || undefined}
+  data-armed={(away && armed) || undefined}
+  style:--sidebar-frost={away ? `url("${FROSTS[scene()]}")` : undefined}
   data-tauri-drag-region="deep"
   aria-label={m.ui_browser_sidebar()}
   style:width={`${width}px`}
@@ -271,17 +308,17 @@
   data-pointer-in={pointerIn}
   onpointerenter={() => {
     pointerIn = true;
-    if (hidden) clearTimeout(linger);
+    if (away) clearTimeout(linger);
   }}
   onpointerleave={() => {
     pointerIn = false;
-    if (hidden && peeking) release();
+    if (away && peeking) release();
   }}
   class="browser-sidebar relative flex shrink-0 flex-col text-text select-none"
 >
   {#if !navigating && !railPage && tools.activeTool() === null}<SidebarResizeHandle
       {width}
-      disabled={reshaping}
+      disabled={reshaping || hidden}
     />{/if}
   <!-- Settings stands beside the rail with no head: its panel runs the full
        height and the rail keeps only the lights' row. A tool keeps the head,
@@ -340,10 +377,19 @@
     inset-block: 8px;
     inset-inline-start: 8px;
     z-index: 30;
+
+    /* The window's own gutter stands round the column when it is in view;
+       out over the page, the card keeps that room inside its edge. */
+    box-sizing: content-box;
+    padding-inline: 8px;
+    padding-block-end: 8px;
     border-radius: var(--content-radius);
     background: var(--sidebar-frost) center / cover;
     box-shadow: var(--shadow-overlay);
     translate: calc(-100% - 24px) 0;
+  }
+
+  .browser-sidebar[data-hidden][data-armed] {
     transition: translate var(--motion-page) var(--ease-emphasized);
   }
 
@@ -351,16 +397,8 @@
     translate: 0 0;
   }
 
-  .peek-edge {
-    position: absolute;
-    inset-block: 0;
-    inset-inline-start: 0;
-    z-index: 31;
-    width: 8px;
-  }
-
   @media (prefers-reduced-motion: reduce) {
-    .browser-sidebar[data-hidden] {
+    .browser-sidebar[data-hidden][data-armed] {
       transition: none;
     }
   }

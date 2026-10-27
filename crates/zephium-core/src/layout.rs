@@ -92,7 +92,7 @@ pub struct Layout {
 
 /// How far past the column a hidden sidebar's chrome reaches, so the shadow
 /// it casts over the page while it is shown is not cut off.
-pub const HIDDEN_SHADOW_REACH: f64 = 32.0;
+pub const HIDDEN_SHADOW_REACH: f64 = 64.0;
 
 pub fn compute(window: Size, mode: Mode, m: Metrics, content_present: bool) -> Layout {
     match mode {

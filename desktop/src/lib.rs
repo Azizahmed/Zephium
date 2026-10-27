@@ -5351,20 +5351,23 @@ fn sidebar_set_hidden(caller: WebviewWindow, shell: State<'_, Handle>, hidden: b
         return;
     }
     #[cfg(target_os = "macos")]
-    platform::imp::tuck_window_controls(&caller, hidden);
+    platform::imp::sidebar_hidden(&caller, hidden);
     shell.dispatch(Command::SetSidebarHidden(hidden));
 }
 
 /// Brings a hidden sidebar over the page while the pointer wants it, or puts
-/// it back beneath. The window controls ride with it.
+/// it back beneath. The window controls show with the card, and leave the
+/// moment it starts to go rather than once it has.
 #[tauri::command]
 #[specta::specta]
-fn sidebar_peek(caller: WebviewWindow, shell: State<'_, Handle>, peek: bool) {
+fn sidebar_peek(caller: WebviewWindow, shell: State<'_, Handle>, peek: bool, lights: bool) {
     if !authorize(&caller, CallerPolicy::Main, "sidebar_peek") {
         return;
     }
     #[cfg(target_os = "macos")]
-    platform::imp::tuck_window_controls(&caller, !peek);
+    platform::imp::sidebar_card_lights(&caller, peek && lights);
+    #[cfg(not(target_os = "macos"))]
+    let _ = lights;
     shell.dispatch(Command::PeekSidebar(peek));
 }
 
