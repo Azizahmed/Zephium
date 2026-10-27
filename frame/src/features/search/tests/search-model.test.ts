@@ -85,6 +85,11 @@ describe("result presentation", () => {
     expect(matchRange("Rust Book", "book rust")).toBeNull();
     expect(matchRange("Rust Book", "   ")).toBeNull();
   });
+  it("maps expanded lowercase characters back to the original title", () => {
+    expect(matchRange("İstanbul News", "news")).toEqual([9, 13]);
+    expect(matchRange("İstanbul", "i")).toEqual([0, 1]);
+    expect(matchRange("🙂İstanbul", "tan")).toEqual([4, 7]);
+  });
 });
 
 describe("inline completion", () => {

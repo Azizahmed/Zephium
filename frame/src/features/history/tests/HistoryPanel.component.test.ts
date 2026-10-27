@@ -63,6 +63,12 @@ test("lists recent pages in the sidebar", async () => {
   await expect.element(page.getByText("Today")).toBeVisible();
 });
 
+test("highlights the original title after a lowercase expansion", async () => {
+  serve([visit("İstanbul News", 60)]);
+  const screen = await render(HistoryPanel, { profile: "unicode-highlight", query: "news" });
+  await expect.poll(() => screen.container.querySelector("mark")?.textContent).toBe("News");
+});
+
 test("takes its query from the frame that owns the field", async () => {
   serve([visit("Rust Book", 60), visit("Release Notes", 120)]);
 

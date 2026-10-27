@@ -1,3 +1,4 @@
+import { matchRange as titleMatchRange } from "$shared/lib/match-range";
 import type { SearchResult, SearchContext } from "$shared/ipc/bindings";
 
 /** Canonical identity of the action a row runs. Selection follows this, not
@@ -72,14 +73,13 @@ export function resultDetail(result: SearchResult): string {
   return hostOf(result.detail);
 }
 
+const lowercase = (value: string) => value.toLowerCase();
+
 /** The one contiguous span of `title` matching the query, for emphasis. A
  *  scattered per-token match is deliberately not highlighted: fragmenting a
  *  title into alternating weights reads as noise at this size. */
 export function matchRange(title: string, query: string): [number, number] | null {
-  const needle = query.trim().toLowerCase();
-  if (!needle) return null;
-  const at = title.toLowerCase().indexOf(needle);
-  return at < 0 ? null : [at, at + needle.length];
+  return titleMatchRange(title, query, lowercase);
 }
 
 /** Native sends a tab its bare host and a visit its full address, so accept
