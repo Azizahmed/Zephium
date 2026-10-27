@@ -768,6 +768,73 @@ mod tests {
     }
 
     #[test]
+    fn legacy_store_rebuild_recovers_only_verified_granted_permissions() {
+        for (name, expected) in [("webext-native-app", true), ("webext-native", false)] {
+            let root = tempfile::tempdir().unwrap();
+            let extensions = WebExtensions {
+                root: root.path().to_path_buf(),
+                state: Default::default(),
+            };
+            let bytes: &[u8] = if name == "webext-native-app" {
+                include_bytes!("../../../tests/fixtures/webext-native-app.crx")
+            } else {
+                include_bytes!("../../../tests/fixtures/webext-native.crx")
+            };
+            let verified = crx::verify(bytes, None).unwrap();
+            let profile = ProfileId::from(1);
+            let staged = stage(
+                root.path(),
+                Source::Store(verified.id, bytes.to_vec()),
+                profile,
+                &[],
+            )
+            .unwrap();
+            let mut entry = staged.pending.entry.clone();
+            let packages = extensions.packages(&entry.id);
+            publish(&packages, &staged.pending).unwrap();
+            entry.reviewed_permissions.clear();
+            entry.publisher_verified = false;
+            entry.source.clear();
+            entry.prepared_digest.clear();
+            entry.permissions = vec![
+                "storage".into(),
+                "nativeMessaging".into(),
+                "activeTab".into(),
+            ];
+            std::fs::write(packages.join(format!("{}.crx", entry.version)), bytes).unwrap();
+            let revision = entry.compat.clone();
+            extensions.rebuild(&mut entry, &revision).unwrap();
+            assert!(entry.publisher_verified);
+            assert_eq!(
+                entry
+                    .reviewed_permissions
+                    .contains(&"nativeMessaging".into()),
+                expected
+            );
+            assert!(!entry.reviewed_permissions.contains(&"activeTab".into()));
+            assert_eq!(
+                extensions
+                    .load(
+                        &entry,
+                        ExtensionInstallId::parse(&entry.install).unwrap(),
+                        true
+                    )
+                    .external_native_messaging,
+                expected
+            );
+            entry
+                .permissions
+                .retain(|permission| permission != "nativeMessaging");
+            entry.reviewed_permissions.clear();
+            entry.publisher_verified = false;
+            extensions.rebuild(&mut entry, &revision).unwrap();
+            assert!(!entry
+                .reviewed_permissions
+                .contains(&"nativeMessaging".into()));
+        }
+    }
+
+    #[test]
     fn folder_confirmation_uses_the_frozen_reviewed_original() {
         let root = tempfile::tempdir().unwrap();
         let source = root.path().join("developer");

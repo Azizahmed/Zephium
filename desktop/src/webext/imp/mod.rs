@@ -232,6 +232,13 @@ impl WebExtensions {
             if manifest.version() != Some(entry.version.as_str()) {
                 return Err("The original package version changed.".into());
             }
+            let reviewed_permissions = (!entry.sideloaded).then(|| {
+                manifest
+                    .permissions()
+                    .into_iter()
+                    .filter(|permission| entry.permissions.contains(permission))
+                    .collect::<Vec<_>>()
+            });
             prepare_package(&staged, &entry.access)?;
             let prepared_digest = tree_digest(&staged).map_err(|e| e.to_string())?;
             let package =
@@ -242,6 +249,10 @@ impl WebExtensions {
             entry.source = source;
             entry.prepared_digest = prepared_digest;
             entry.compat = revision.to_owned();
+            if let Some(reviewed_permissions) = reviewed_permissions {
+                entry.reviewed_permissions = reviewed_permissions;
+                entry.publisher_verified = true;
+            }
             Ok(())
         })();
         if result.is_err() {
