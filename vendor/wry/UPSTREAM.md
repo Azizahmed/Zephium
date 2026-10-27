@@ -80,10 +80,14 @@ Its security-relevant deltas currently enforce these invariants:
   client-certificate event interfaces and registers deny handlers before the
   initial navigation. Basic authentication is cancelled; certificate
   selection is cancelled and marked handled, so neither can fall back to an
-  unowned native dialog. It also requires `ICoreWebView2_25` and cancels plus
-  suppresses `SaveAsUIShowing`, closing the independent native Save As surface
-  that context-menu, accelerator, PDF-toolbar, and download policy do not
-  comprehensively cover.
+  unowned native dialog. It also requires `ICoreWebView2_25` and registers a
+  `SaveAsUIShowing` gate. Browser-initiated document saves retain the default
+  dialog while their document gate is active. A resource save is admitted only
+  when download policy permits it, native context-menu and download handlers
+  are installed, and `native_resource_save_handler` accepts it; the default
+  dialog is suppressed and the native download broker owns its picker and path.
+  All other requests are cancelled before suppressing the dialog. A resource
+  handler panic denies.
 - WebView2 and WebKitGTK page-driven close requests default to a no-op.
   Destroying Wry's child container/widget is an explicit builder policy for
   embedders that can also reconcile native and logical-view ownership; a page
