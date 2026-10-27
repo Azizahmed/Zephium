@@ -6,7 +6,7 @@
   import { surface as browserPage } from "$domain/surface";
   import { tabs } from "$domain/tabs";
   import * as tools from "$session/tools.svelte";
-  import { untrack } from "svelte";
+  import { tick, untrack } from "svelte";
   import {
     COMPACT_WIDTH,
     PANEL_GAP,
@@ -84,15 +84,73 @@
     browserPage.currentPage() === null && !!tabs.activeTab()?.url && !tabs.activeTab()?.loading,
   );
   let away = $state(isHidden());
+  // What the chrome draws beside the column has no native slide, so the
+  // column and it move as one instead: the column pushed out as the new tab
+  // takes its room, or drawn back in as it gives it up.
+  let leaving = $state<DOMRect | null>(null);
+  const beside = () =>
+    document.querySelector<HTMLElement>("[data-zephium-new-tab], .internal-stage");
+  const pushTiming = () => ({
+    duration: duration("page"),
+    easing:
+      getComputedStyle(document.documentElement).getPropertyValue("--ease-emphasized").trim() ||
+      "ease-out",
+  });
   $effect(() => {
     if (!hidden) {
+      const main = untrack(() => away && !overPage && !reducedMotion()) ? beside() : null;
+      const before = main?.getBoundingClientRect().left;
       away = false;
+      if (main && before !== undefined)
+        void tick().then(() => {
+          if (!aside || isHidden()) return;
+          const timing = pushTiming();
+          const shift = before - main.getBoundingClientRect().left;
+          main.animate([{ translate: `${shift}px 0` }, { translate: "0 0" }], timing);
+          const reach = aside.getBoundingClientRect().right;
+          aside.animate([{ translate: `${-reach}px 0` }, { translate: "0 0" }], timing);
+        });
       return;
     }
     if (untrack(() => away)) return;
-    if (!untrack(() => overPage) || reducedMotion()) {
+    if (reducedMotion()) {
       away = true;
       return;
+    }
+    if (!untrack(() => overPage)) {
+      const main = beside();
+      const rect = aside?.getBoundingClientRect();
+      if (!main || !rect) {
+        away = true;
+        return;
+      }
+      const before = main.getBoundingClientRect().left;
+      leaving = rect;
+      let pushed: Animation | undefined;
+      let slid: Animation | undefined;
+      void tick().then(() => {
+        if (!aside || !leaving) return;
+        const timing = pushTiming();
+        const shift = before - main.getBoundingClientRect().left;
+        slid = main.animate([{ translate: `${shift}px 0` }, { translate: "0 0" }], timing);
+        pushed = aside.animate([{ translate: "0 0" }, { translate: `${-rect.right}px 0` }], {
+          ...timing,
+          fill: "forwards",
+        });
+        pushed.finished.then(
+          () => {
+            away = true;
+            leaving = null;
+            pushed?.cancel();
+          },
+          () => {},
+        );
+      });
+      return () => {
+        pushed?.cancel();
+        slid?.cancel();
+        leaving = null;
+      };
     }
     const covered = setTimeout(() => (away = true), duration("page"));
     return () => clearTimeout(covered);
@@ -114,14 +172,20 @@
   let aside = $state<HTMLElement>();
   let peeking = $state(false);
   let atEdge = false;
+  /** Once out, the card stays a moment whatever the pointer does: it is
+   *  still arriving, and a hand settling onto it should not send it back. */
+  const SETTLE_MS = 520;
   /** Leaving the card gives it a moment: a pointer overshooting its edge
    *  and coming straight back should not see it go and return. */
-  const LINGER_MS = 180;
+  const LINGER_MS = 280;
+  let opened = 0;
   let linger: ReturnType<typeof setTimeout> | undefined;
   let lowered: ReturnType<typeof setTimeout> | undefined;
   function peek() {
     clearTimeout(linger);
     clearTimeout(lowered);
+    lowered = undefined;
+    if (!peeking) opened = performance.now();
     if (peeking) {
       void commands.sidebarPeek(true, true);
       return;
@@ -144,14 +208,21 @@
   };
   function release() {
     clearTimeout(linger);
-    linger = setTimeout(() => {
-      if (pointerIn || atEdge || needed()) return;
-      peeking = false;
-      // The controls go as the card starts to; the chrome goes back beneath
-      // the page once the card has slid away.
-      void commands.sidebarPeek(true, false);
-      lowered = setTimeout(() => void commands.sidebarPeek(false, false), duration("page"));
-    }, LINGER_MS);
+    const settling = Math.max(0, opened + SETTLE_MS - performance.now());
+    linger = setTimeout(
+      () => {
+        if (pointerIn || atEdge || needed()) return;
+        peeking = false;
+        // The controls go as the card starts to; the chrome goes back beneath
+        // the page once the card has slid away.
+        void commands.sidebarPeek(true, false);
+        lowered = setTimeout(() => {
+          lowered = undefined;
+          void commands.sidebarPeek(false, false);
+        }, duration("page"));
+      },
+      Math.max(LINGER_MS, settling),
+    );
   }
   $effect(() => {
     const edge = (event: Event) => {
@@ -264,7 +335,12 @@
   // focus ends it too.
   let pointerIn = $state(false);
   $effect(() => {
-    const out = () => (pointerIn = false);
+    // Leaving the window lets the card go too, wherever it was left from.
+    const out = () => {
+      pointerIn = false;
+      atEdge = false;
+      if (away && peeking) release();
+    };
     document.documentElement.addEventListener("mouseleave", out);
     window.addEventListener("blur", out);
     return () => {
@@ -296,6 +372,10 @@
   data-hidden={away || undefined}
   data-peek={(away && peeking) || undefined}
   data-armed={(away && armed) || undefined}
+  data-leaving={leaving ? true : undefined}
+  style:left={leaving ? `${leaving.left}px` : undefined}
+  style:top={leaving ? `${leaving.top}px` : undefined}
+  style:height={leaving ? `${leaving.height}px` : undefined}
   style:--sidebar-frost={away ? `url("${FROSTS[scene()]}")` : undefined}
   data-tauri-drag-region="deep"
   aria-label={m.ui_browser_sidebar()}
@@ -308,7 +388,9 @@
   data-pointer-in={pointerIn}
   onpointerenter={() => {
     pointerIn = true;
-    if (away) clearTimeout(linger);
+    // Back on the card as it leaves, it comes back.
+    if (away && !peeking && lowered !== undefined) peek();
+    else if (away) clearTimeout(linger);
   }}
   onpointerleave={() => {
     pointerIn = false;
@@ -387,6 +469,12 @@
     background: var(--sidebar-frost) center / cover;
     box-shadow: var(--shadow-overlay);
     translate: calc(-100% - 24px) 0;
+  }
+
+  /* On its way out beside the new tab: where it stood, out of the row. */
+  .browser-sidebar[data-leaving] {
+    position: fixed;
+    z-index: 30;
   }
 
   .browser-sidebar[data-hidden][data-armed] {

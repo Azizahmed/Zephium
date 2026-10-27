@@ -962,7 +962,7 @@
 }
 
 /* A hidden column is out of the row, so the page's own inset from it goes. */
-.shell:has(> .browser-sidebar[data-hidden]) .stage-column > main,
-.shell:has(> .browser-sidebar[data-hidden]) .internal-stage {
+.shell:has(> .browser-sidebar:is([data-hidden], [data-leaving])) .stage-column > main,
+.shell:has(> .browser-sidebar:is([data-hidden], [data-leaving])) .internal-stage {
   padding-inline-start: 0;
 }
