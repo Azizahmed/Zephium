@@ -42,6 +42,10 @@ name = "WebKit callback and prompt hardening"
 paths = ["src/wkwebview"]
 
 [[patch_sets]]
+name = "bounded NSString dialog inputs before Rust allocation"
+paths = ["src/wkwebview/script_dialog.rs", "src/wkwebview/class/wry_web_view_ui_delegate.rs"]
+
+[[patch_sets]]
 name = "WebKit frame-scoped extension resource admission"
 paths = ["src/wkwebview/navigation.rs"]
 

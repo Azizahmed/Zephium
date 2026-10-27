@@ -231,7 +231,11 @@ titled by the initiating frame's security-origin host ("example.com says", or
 "An embedded page at … says"). A hidden view, or a window that already shows a
 sheet, gets the dismissed answer, as upstream's no-UI default did. From the
 second dialog within ten seconds the sheet offers to silence the page until its
-URL changes. Messages are bounded to 1,024 characters.
+URL changes. Messages are bounded to 1,024 characters. Message and prompt-default native
+strings are admitted at 2,048 UTF-16 units / 4,096 UTF-8 bytes before a Rust
+copy; oversized values dismiss once. Origin titles, document URLs and prompt
+answers also use native preallocation bounds. Native WebKit may already own
+its input NSString; this prevents duplicating an attacker-sized value in Rust.
 
 `navigation_failure_handler` reduces a failed main-frame navigation's
 `NSURLError` code to a category the host can explain (offline, host not found,
