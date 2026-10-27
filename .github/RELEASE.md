@@ -93,8 +93,19 @@ existing install on its current version.
    betas: `releases/latest` skips pre-releases, and both the website and the
    updater resolve through it.
 
-To rebuild a tag (for example after a flaky runner), run **Actions → Release →
-Run workflow** with the tag, or `gh workflow run release.yml -f tag=v1.0.0-beta.1`.
+To rebuild a tag (for example after a flaky runner), select the same tag in
+both **Actions → Release → Run workflow → Use workflow from** and the `tag`
+input. The gate binds that tag to the workflow commit; CI and both build jobs
+then check out the immutable `github.sha`, even if the tag moves later. With the
+CLI, pass the tag ref explicitly:
+
+```sh
+gh workflow run release.yml --ref v1.0.0-beta.1 -f tag=v1.0.0-beta.1
+```
+
+The [CLI defaults to the default branch](https://cli.github.com/manual/gh_workflow_run)
+without `--ref`. Release refuses a different workflow ref or checkout commit so
+its workflow `head_sha` and provenance describe the candidate's tag commit.
 An existing draft for that tag is replaced; a published release is never
 touched.
 
