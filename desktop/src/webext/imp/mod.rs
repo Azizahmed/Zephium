@@ -5,7 +5,9 @@ mod install;
 mod response;
 mod updates;
 
-pub(in crate::webext) use install::{choose_file, confirm, prepare, prepare_file, review_update};
+pub(in crate::webext) use install::{
+    choose_file, confirm, prepare, prepare_file, review_update, take_pending,
+};
 pub(in crate::webext) use updates::start_updates;
 
 use std::collections::HashMap;
@@ -18,7 +20,11 @@ use zephium_core::ports::engine::WebExtensionLoad;
 use zephium_webext::manifest::Manifest;
 use zephium_webext::{archive, crx, permissions, ExtensionId};
 
-use super::{Access, Entry, Registry, WebExtensionView, WebExtensions};
+use super::{Access, Entry, Original, Registry, WebExtensionView, WebExtensions};
+
+// Publication, registry joins and pruning share one process-wide lease,
+// including the background update coordinator's WebExtensions instance.
+static PUBLICATION: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 const MAX_PACKAGE_BYTES: u64 = 128 * 1024 * 1024;
 
@@ -90,21 +96,45 @@ impl WebExtensions {
     /// which are erased by the browser before their files go, and builds
     /// replaced by updates or compatibility-layer changes.
     fn prune(&self) {
-        let mut kept: HashMap<String, Vec<String>> = HashMap::new();
-        for profile in self.profiles() {
-            for entry in self.registry(profile).extensions {
-                let files = kept.entry(entry.id.clone()).or_default();
-                files.push(entry.package.clone());
-                for original in ["crx", "zip", "src"] {
-                    files.push(format!("{}.{original}", entry.version));
+        let root = self.root.clone();
+        std::thread::spawn(move || {
+            let Ok(_publication) = PUBLICATION.lock() else {
+                return;
+            };
+            let extensions = WebExtensions {
+                root,
+                state: std::sync::Mutex::new(None),
+            };
+            let mut kept: HashMap<String, Vec<String>> = HashMap::new();
+            for profile in extensions.profiles() {
+                for entry in extensions.registry(profile).extensions {
+                    let files = kept.entry(entry.id.clone()).or_default();
+                    files.push(entry.package.clone());
+                    let source = if entry.source.is_empty() {
+                        &entry.version
+                    } else {
+                        &entry.source
+                    };
+                    for original in ["crx", "zip", "src"] {
+                        files.push(format!("{source}.{original}"));
+                    }
                 }
             }
-        }
-        let packages = self.root.join("packages");
-        std::thread::spawn(move || prune_packages(&packages, &kept));
+            prune_packages(&extensions.root.join("packages"), &kept);
+        });
+    }
+
+    fn apply_registry(&self, profile: ProfileId, _captured: &Registry) -> Registry {
+        // A caller may have released its mutation lease before this apply.
+        // Rejoin the authoritative registry under the newly acquired lease.
+        self.registry(profile)
     }
 
     fn apply(&self, shell: &Handle, profile: ProfileId, registry: &mut Registry) {
+        let Ok(_publication) = PUBLICATION.lock() else {
+            return;
+        };
+        *registry = self.apply_registry(profile, registry);
         let mut changed = false;
         let mut loads = Vec::new();
         for entry in registry.extensions.iter_mut() {
@@ -116,7 +146,10 @@ impl WebExtensions {
                 continue;
             }
             let revision = compat_revision(&entry.access);
-            if entry.compat != revision {
+            if entry.compat != revision
+                || entry.source.is_empty()
+                || entry.prepared_digest.is_empty()
+            {
                 match self.rebuild(entry, &revision) {
                     Ok(()) => changed = true,
                     Err(error) => {
@@ -148,40 +181,73 @@ impl WebExtensions {
     }
 
     fn rebuild(&self, entry: &mut Entry, revision: &str) -> Result<(), String> {
+        use zephium_webext::package::{publish_directory, tree_digest};
         let packages = self.packages(&entry.id);
-        let package = format!("{}-{revision}", entry.version);
-        let target = packages.join(&package);
-        #[cfg(target_os = "windows")]
-        if zephium_webext::windows::is_prepared(&target, revision) {
-            entry.package = package;
-            entry.compat = revision.to_owned();
-            return Ok(());
-        }
-        let _ = std::fs::remove_dir_all(&target);
-        let limits = archive::Limits::default();
-        let original = |kind: &str| packages.join(format!("{}.{kind}", entry.version));
-        if original("crx").is_file() {
-            let bytes = std::fs::read(original("crx")).map_err(|e| e.to_string())?;
-            let expected = ExtensionId::parse(&entry.id).ok_or("invalid extension id")?;
-            let verified = crx::verify(&bytes, Some(&expected)).map_err(|e| e.to_string())?;
-            archive::extract(verified.zip, &target, &limits).map_err(|e| e.to_string())?;
-            platform::record_signed_key(&target, verified.public_key)?;
-        } else if original("zip").is_file() {
-            let bytes = std::fs::read(original("zip")).map_err(|e| e.to_string())?;
-            archive::extract(&bytes, &target, &limits).map_err(|e| e.to_string())?;
+        let key = if entry.source.is_empty() {
+            &entry.version
         } else {
-            archive::copy_dir(&original("src"), &target, &limits).map_err(|e| e.to_string())?;
+            &entry.source
+        };
+        let original_path = |kind: &str| packages.join(format!("{key}.{kind}"));
+        let original = if original_path("crx").is_file() {
+            Original::Crx(std::fs::read(original_path("crx")).map_err(|e| e.to_string())?)
+        } else if original_path("zip").is_file() {
+            Original::Zip(std::fs::read(original_path("zip")).map_err(|e| e.to_string())?)
+        } else {
+            Original::Folder(original_path("src"))
+        };
+        if !entry.sideloaded && !matches!(original, Original::Crx(_)) {
+            return Err(
+                "The verified Store package is unavailable; review its signed update again.".into(),
+            );
         }
-        if let Err(error) = prepare_package(&target, &entry.access) {
-            let _ = std::fs::remove_dir_all(&target);
-            return Err(error.to_string());
+        let source = install::original_identity(&original)?;
+        if !entry.source.is_empty() && entry.source != source {
+            return Err("The original package identity changed.".into());
         }
-        let old = std::mem::replace(&mut entry.package, package);
-        if cfg!(target_os = "macos") && old != entry.package {
-            let _ = std::fs::remove_dir_all(packages.join(old));
+        let staged = self
+            .root
+            .join("staging")
+            .join(ExtensionInstallId::generate().to_string());
+        std::fs::create_dir_all(staged.parent().ok_or("invalid staging path")?)
+            .map_err(|e| e.to_string())?;
+        let result = (|| {
+            let limits = archive::Limits::default();
+            match &original {
+                Original::Crx(bytes) => {
+                    let expected = ExtensionId::parse(&entry.id).ok_or("invalid extension id")?;
+                    let verified =
+                        crx::verify(bytes, Some(&expected)).map_err(|e| e.to_string())?;
+                    archive::extract(verified.zip, &staged, &limits).map_err(|e| e.to_string())?;
+                    platform::record_signed_key(&staged, verified.public_key)?;
+                }
+                Original::Zip(bytes) => {
+                    archive::extract(bytes, &staged, &limits).map_err(|e| e.to_string())?;
+                }
+                Original::Folder(path) => {
+                    archive::copy_dir(path, &staged, &limits).map_err(|e| e.to_string())?;
+                }
+            }
+            let manifest = Manifest::load(&staged).map_err(|error| error.to_string())?;
+            if manifest.version() != Some(entry.version.as_str()) {
+                return Err("The original package version changed.".into());
+            }
+            prepare_package(&staged, &entry.access)?;
+            let prepared_digest = tree_digest(&staged).map_err(|e| e.to_string())?;
+            let package =
+                zephium_webext::package::publication_identity(&source, revision, &prepared_digest);
+            install::keep_original(&packages, &source, &original)?;
+            publish_directory(&staged, &packages.join(&package)).map_err(|e| e.to_string())?;
+            entry.package = package;
+            entry.source = source;
+            entry.prepared_digest = prepared_digest;
+            entry.compat = revision.to_owned();
+            Ok(())
+        })();
+        if result.is_err() {
+            let _ = std::fs::remove_dir_all(staged);
         }
-        entry.compat = revision.to_owned();
-        Ok(())
+        result
     }
 }
 
@@ -382,16 +448,30 @@ pub(in crate::webext) async fn set_enabled(
     enabled: bool,
 ) -> Result<(), String> {
     let profile = target(shell, None).await?.profile;
-    let mut registry = extensions.registry(profile);
-    let entry = registry
-        .extensions
-        .iter_mut()
-        .find(|entry| entry.id == id)
-        .ok_or("That extension isn't installed.")?;
-    entry.enabled = enabled;
-    extensions.save(profile, &registry)?;
-    extensions.apply(shell, profile, &mut registry);
-    Ok(())
+    let root = extensions.root.clone();
+    let shell = shell.clone();
+    let id = id.to_owned();
+    crate::webext::publication(move || {
+        let extensions = WebExtensions {
+            root,
+            state: Default::default(),
+        };
+        let publication = PUBLICATION
+            .lock()
+            .map_err(|_| "Extension state is unavailable.")?;
+        let mut registry = extensions.registry(profile);
+        let entry = registry
+            .extensions
+            .iter_mut()
+            .find(|entry| entry.id == id)
+            .ok_or("That extension isn't installed.")?;
+        entry.enabled = enabled;
+        extensions.save(profile, &registry)?;
+        drop(publication);
+        extensions.apply(&shell, profile, &mut registry);
+        Ok(())
+    })
+    .await
 }
 
 pub(in crate::webext) async fn set_access(
@@ -413,16 +493,30 @@ pub(in crate::webext) async fn set_access(
         _ => return Err("Unknown site access.".into()),
     };
     let profile = target(shell, None).await?.profile;
-    let mut registry = extensions.registry(profile);
-    let entry = registry
-        .extensions
-        .iter_mut()
-        .find(|entry| entry.id == id)
-        .ok_or("That extension isn't installed.")?;
-    entry.access = access;
-    extensions.save(profile, &registry)?;
-    extensions.apply(shell, profile, &mut registry);
-    Ok(())
+    let root = extensions.root.clone();
+    let shell = shell.clone();
+    let id = id.to_owned();
+    crate::webext::publication(move || {
+        let extensions = WebExtensions {
+            root,
+            state: Default::default(),
+        };
+        let publication = PUBLICATION
+            .lock()
+            .map_err(|_| "Extension state is unavailable.")?;
+        let mut registry = extensions.registry(profile);
+        let entry = registry
+            .extensions
+            .iter_mut()
+            .find(|entry| entry.id == id)
+            .ok_or("That extension isn't installed.")?;
+        entry.access = access;
+        extensions.save(profile, &registry)?;
+        drop(publication);
+        extensions.apply(&shell, profile, &mut registry);
+        Ok(())
+    })
+    .await
 }
 
 pub(in crate::webext) async fn open_options(shell: &Handle, id: &str) -> Result<(), String> {
@@ -443,6 +537,9 @@ pub(in crate::webext) fn answer_access(
     let profile = ProfileId::parse(&request.profile_id).ok_or("Invalid profile.")?;
     let number: u64 = request.request.parse().map_err(|_| "Invalid request.")?;
     if allowed {
+        let _publication = PUBLICATION
+            .lock()
+            .map_err(|_| "Extension state is unavailable.")?;
         let mut registry = extensions.registry(profile);
         if let Some(entry) = registry
             .extensions
@@ -476,20 +573,34 @@ pub(in crate::webext) async fn uninstall(
     id: &str,
 ) -> Result<(), String> {
     let profile = target(shell, None).await?.profile;
-    let mut registry = extensions.registry(profile);
-    let Some(position) = registry.extensions.iter().position(|entry| entry.id == id) else {
-        return Err("That extension isn't installed.".into());
-    };
-    let entry = registry.extensions.remove(position);
-    extensions.save(profile, &registry)?;
-    // Its package files stay until the next launch: the browser may need
-    // them to load the extension once more to erase its data.
-    if let Some(install) = ExtensionInstallId::parse(&entry.install) {
-        shell.dispatch(zephium_app::Command::RemoveWebExtension {
-            profile,
-            extension: Box::new(extensions.load(&entry, install, false)),
-        });
-    }
-    extensions.apply(shell, profile, &mut registry);
-    Ok(())
+    let root = extensions.root.clone();
+    let shell = shell.clone();
+    let id = id.to_owned();
+    crate::webext::publication(move || {
+        let extensions = WebExtensions {
+            root,
+            state: Default::default(),
+        };
+        let publication = PUBLICATION
+            .lock()
+            .map_err(|_| "Extension state is unavailable.")?;
+        let mut registry = extensions.registry(profile);
+        let Some(position) = registry.extensions.iter().position(|entry| entry.id == id) else {
+            return Err("That extension isn't installed.".into());
+        };
+        let entry = registry.extensions.remove(position);
+        extensions.save(profile, &registry)?;
+        // Its package files stay until the next launch: the browser may need
+        // them to load the extension once more to erase its data.
+        if let Some(install) = ExtensionInstallId::parse(&entry.install) {
+            shell.dispatch(zephium_app::Command::RemoveWebExtension {
+                profile,
+                extension: Box::new(extensions.load(&entry, install, false)),
+            });
+        }
+        drop(publication);
+        extensions.apply(&shell, profile, &mut registry);
+        Ok(())
+    })
+    .await
 }

@@ -2,10 +2,11 @@
 //! registry on disk, and handing enabled extensions to the shell.
 //!
 //! Layout under the app data directory:
-//! `webext/packages/<id>/<version>.crx` keeps the signed original (or
+//! `webext/packages/<id>/<source-digest>.crx` keeps the signed original (or
 //! `.zip`, or a `.src/` folder, for an extension installed from a file), and
-//! `webext/packages/<id>/<version>-<compat>/` is the tree WebKit loads,
-//! rebuilt from the original whenever the compatibility layer changes.
+//! `webext/packages/<id>/pkg-<publication-digest>/` is the tree WebKit loads,
+//! rebuilt from the original whenever the compatibility layer changes. The publication
+//! digest binds verified source provenance, transformation revision and prepared bytes.
 //! `webext/profiles/<profile>.json` records what a profile installed.
 
 use std::path::{Path, PathBuf};
@@ -27,10 +28,14 @@ pub(crate) struct WebExtensions {
 
 #[cfg_attr(not(any(target_os = "macos", target_os = "windows")), allow(dead_code))]
 struct Pending {
+    /// Single-use approval for this exact package and destination profile.
+    review_id: String,
     profile: ProfileId,
     entry: Entry,
     staged: PathBuf,
     original: Original,
+    /// The exact install and source the user reviewed replacing.
+    previous: Option<(String, String)>,
 }
 
 /// What a package was installed from, kept to rebuild it later.
@@ -70,6 +75,11 @@ struct Entry {
     enabled: bool,
     /// Directory under `packages/<id>/` WebKit loads.
     package: String,
+    /// Authenticated CRX bytes, ZIP bytes, or the frozen original folder tree.
+    #[serde(default)]
+    source: String,
+    #[serde(default)]
+    prepared_digest: String,
     /// Compatibility layer the package was prepared with.
     compat: String,
     /// Compatibility layer WebKit last started the background with.
@@ -98,6 +108,8 @@ struct Entry {
 
 #[derive(Clone, Debug, Serialize, specta::Type)]
 pub(crate) struct WebExtensionReview {
+    /// Identifies the package/profile shown by this particular review.
+    review_id: String,
     id: String,
     name: String,
     version: String,
@@ -215,6 +227,15 @@ fn unseal(path: &Path) {
 
 const UNAVAILABLE: &str = "Extensions are unavailable in this build.";
 
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+async fn publication(
+    work: impl FnOnce() -> Result<(), String> + Send + 'static,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(work)
+        .await
+        .map_err(|_| "Extension state is unavailable.".to_owned())?
+}
+
 /// A recommended extension's icon as a data URL, or `None` while the store
 /// can't be reached.
 #[tauri::command]
@@ -261,6 +282,7 @@ pub(crate) async fn web_extension_confirm(
     shell: State<'_, Handle>,
     extensions: State<'_, WebExtensions>,
     id: String,
+    review_id: String,
 ) -> Result<(), String> {
     if !authorize(&caller, CallerPolicy::Main, "web_extension_confirm")
         || shutdown_started(caller.app_handle())
@@ -268,24 +290,60 @@ pub(crate) async fn web_extension_confirm(
         return Err(UNAVAILABLE.into());
     }
     #[cfg(any(target_os = "macos", target_os = "windows"))]
-    return imp::confirm(&shell, &extensions, &id);
+    {
+        // Freeze the exact managed review before queueing blocking work: a
+        // newer review may replace the slot while publication is waiting.
+        let pending = imp::take_pending(&extensions, &id, &review_id)?;
+        let app = caller.app_handle().clone();
+        let shell = shell.inner().clone();
+        publication(move || {
+            let extensions = app.state::<WebExtensions>();
+            imp::confirm(&shell, &extensions, pending)
+        })
+        .await
+    }
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
-        let _ = (shell, extensions, id);
+        let _ = (shell, extensions, id, review_id);
         Err(UNAVAILABLE.into())
     }
 }
 
 #[tauri::command]
 #[specta::specta]
-pub(crate) fn web_extension_cancel(caller: WebviewWindow, extensions: State<'_, WebExtensions>) {
+pub(crate) async fn web_extension_cancel(caller: WebviewWindow, review_id: String) {
     if !authorize(&caller, CallerPolicy::Main, "web_extension_cancel") {
         return;
     }
-    if let Ok(mut pending) = extensions.state.lock() {
-        if let Some(pending) = pending.take() {
-            let _ = std::fs::remove_dir_all(pending.staged);
-        }
+    let pending = {
+        let extensions = caller.state::<WebExtensions>();
+        cancel_pending(&extensions, &review_id)
+    };
+    if let Some(pending) = pending {
+        discard_cancelled(pending).await;
+    }
+}
+
+async fn discard_cancelled(pending: Pending) {
+    let _ = tauri::async_runtime::spawn_blocking(move || discard_pending(&pending)).await;
+}
+
+fn discard_pending(pending: &Pending) {
+    let _ = std::fs::remove_dir_all(&pending.staged);
+    if let Original::Folder(path) = &pending.original {
+        let _ = std::fs::remove_dir_all(path);
+    }
+}
+
+fn cancel_pending(extensions: &WebExtensions, review_id: &str) -> Option<Pending> {
+    let mut state = extensions.state.lock().ok()?;
+    if state
+        .as_ref()
+        .is_some_and(|pending| pending.review_id == review_id)
+    {
+        state.take()
+    } else {
+        None
     }
 }
 
@@ -333,10 +391,9 @@ pub(crate) async fn web_extension_set_enabled(
 /// kept for the next launch.
 #[tauri::command]
 #[specta::specta]
-pub(crate) fn web_extension_answer_access(
+pub(crate) async fn web_extension_answer_access(
     caller: WebviewWindow,
     shell: State<'_, Handle>,
-    extensions: State<'_, WebExtensions>,
     request: zephium_ipc::WebExtensionAccessRequestView,
     allowed: bool,
 ) -> Result<(), String> {
@@ -344,10 +401,18 @@ pub(crate) fn web_extension_answer_access(
         return Err(UNAVAILABLE.into());
     }
     #[cfg(any(target_os = "macos", target_os = "windows"))]
-    return imp::answer_access(&shell, &extensions, request, allowed);
+    {
+        let app = caller.app_handle().clone();
+        let shell = shell.inner().clone();
+        publication(move || {
+            let extensions = app.state::<WebExtensions>();
+            imp::answer_access(&shell, &extensions, request, allowed)
+        })
+        .await
+    }
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
-        let _ = (shell, extensions, request, allowed);
+        let _ = (shell, request, allowed);
         Err(UNAVAILABLE.into())
     }
 }
@@ -522,5 +587,46 @@ mod tests {
         unseal(&path);
         std::fs::remove_dir_all(&path).unwrap();
         assert!(!path.exists());
+    }
+}
+
+#[cfg(all(test, any(target_os = "macos", target_os = "windows")))]
+mod publication_tests {
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_publication_lock_wait_leaves_the_command_executor_responsive() {
+        let lease = std::sync::Arc::new(std::sync::Mutex::new(()));
+        let held = lease.clone();
+        let (ready, locked) = std::sync::mpsc::channel();
+        let (arrived, waiting) = std::sync::mpsc::channel();
+        let (progress, observed) = std::sync::mpsc::channel();
+        let supervisor = std::thread::spawn(move || {
+            let guard = held.lock().unwrap();
+            let _ = ready.send(());
+            let started = waiting
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .is_ok();
+            let responsive = observed
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .is_ok();
+            drop(guard);
+            started && responsive
+        });
+        locked
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap();
+        let (entered, started) = tokio::sync::oneshot::channel();
+        let operation = tokio::spawn(super::publication(move || {
+            let _ = arrived.send(());
+            let _ = entered.send(());
+            let _guard = lease.lock().unwrap();
+            Ok(())
+        }));
+        started.await.unwrap();
+        let _ = progress.send(());
+        operation.await.unwrap().unwrap();
+        assert!(
+            supervisor.join().unwrap(),
+            "the executor must run while publication is blocked"
+        );
     }
 }

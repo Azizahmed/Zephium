@@ -313,8 +313,8 @@ export const commands = {
 	 *  returns what the user is asked to approve.
 	 */
 	webExtensionPrepare: (tabId: string) => typedError<WebExtensionReview, string>(__TAURI_INVOKE("web_extension_prepare", { tabId })),
-	webExtensionConfirm: (id: string) => typedError<null, string>(__TAURI_INVOKE("web_extension_confirm", { id })),
-	webExtensionCancel: () => __TAURI_INVOKE<void>("web_extension_cancel"),
+	webExtensionConfirm: (id: string, reviewId: string) => typedError<null, string>(__TAURI_INVOKE("web_extension_confirm", { id, reviewId })),
+	webExtensionCancel: (reviewId: string) => __TAURI_INVOKE<void>("web_extension_cancel", { reviewId }),
 	webExtensionList: () => typedError<WebExtensionView[], string>(__TAURI_INVOKE("web_extension_list")),
 	webExtensionSetEnabled: (id: string, enabled: boolean) => typedError<null, string>(__TAURI_INVOKE("web_extension_set_enabled", { id, enabled })),
 	webExtensionUninstall: (id: string) => typedError<null, string>(__TAURI_INVOKE("web_extension_uninstall", { id })),
@@ -335,6 +335,8 @@ export const commands = {
 	 *  cancel the picker.
 	 */
 	webExtensionChooseFile: (folder: boolean) => typedError<{
+	/**  Identifies the package/profile shown by this particular review. */
+	review_id: string,
 	id: string,
 	name: string,
 	version: string,
@@ -3484,6 +3486,8 @@ export type WebExtensionAccessRequestView = {
 export type WebExtensionAccessRequested = WebExtensionAccessRequestView;
 
 export type WebExtensionReview = {
+	/**  Identifies the package/profile shown by this particular review. */
+	review_id: string,
 	id: string,
 	name: string,
 	version: string,

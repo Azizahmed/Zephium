@@ -75,8 +75,10 @@ async function reviewing(request: () => Promise<Reviewed>): Promise<void> {
   failure = null;
   const result = await request();
   preparing = false;
-  if (result.status === "ok") pendingReview = result.data;
-  else failure = result.error;
+  if (result.status === "ok") {
+    pendingReview = result.data;
+    failure = null;
+  } else failure = result.error;
 }
 
 export const prepare = (tabId: string) => reviewing(() => commands.webExtensionPrepare(tabId));
@@ -91,26 +93,29 @@ export function listenForDrops(accept: () => boolean = () => true): Promise<() =
   });
 }
 
-export async function confirm(): Promise<void> {
+export async function confirm(reviewId: string): Promise<void> {
   const current = pendingReview;
-  if (current === null || confirming) return;
+  if (current === null || current.review_id !== reviewId || confirming) return;
   confirming = true;
-  const result = await commands.webExtensionConfirm(current.id);
+  const result = await commands.webExtensionConfirm(current.id, current.review_id);
   confirming = false;
   if (result.status === "ok") {
-    pendingReview = null;
-    failure = null;
+    if (pendingReview?.review_id === current.review_id) {
+      pendingReview = null;
+      failure = null;
+    }
     settling = current.id;
     await refresh();
-  } else {
+  } else if (pendingReview?.review_id === current.review_id) {
     failure = result.error;
   }
 }
 
-export function cancel(): void {
+export function cancel(reviewId: string): void {
+  if (pendingReview?.review_id !== reviewId || confirming) return;
   pendingReview = null;
   failure = null;
-  void commands.webExtensionCancel();
+  void commands.webExtensionCancel(reviewId);
 }
 
 export async function setEnabled(id: string, enabled: boolean): Promise<void> {
