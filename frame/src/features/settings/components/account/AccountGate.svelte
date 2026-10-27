@@ -34,7 +34,7 @@
 
 <!--
   Signing in is the Account page's whole scene: the new tab's sky, static,
-  with the name over it and what the page asks of you standing in front.
+  with the app's own icon over it and what the page asks of you in front.
   A sky that cannot be decoded leaves the page its own colour.
 -->
 <div
@@ -53,7 +53,14 @@
     style:background-position={`${sky.x}px ${sky.y}px`}
   ></div>
   <div class="stage">
-    <span class="mark" role="img" aria-label="Zephium"></span>
+    <img
+      class="mark"
+      src="/zephium-icon@2x.png"
+      width="64"
+      height="64"
+      alt="Zephium"
+      draggable="false"
+    />
     {@render children()}
   </div>
   {#if foot}<div class="foot">{@render foot()}</div>{/if}
@@ -135,26 +142,30 @@
     padding: 0 clamp(16px, 4cqi, 32px) 20px;
   }
 
-  /* The name, drawn only as large as itself. */
+  /* The app's own icon, its squircle and shadow included, the one mark
+     that reads the same over either sky. */
   .mark {
     flex: none;
-    inline-size: min(232px, 70%);
-    aspect-ratio: 585 / 84;
-    margin-block-end: 28px;
-    background: var(--sky-name);
-    mask: url("/zephium-wordmark.svg") center / contain no-repeat;
+    inline-size: 64px;
+    block-size: 64px;
+    margin-block-end: 24px;
+    filter: drop-shadow(0 10px 24px var(--sky-shadow));
     opacity: 0;
-    transition: opacity 700ms var(--ease-out);
+    translate: 0 6px;
+    transition:
+      opacity 700ms var(--ease-out),
+      translate 700ms var(--ease-emphasized);
   }
 
   .account-gate:is([data-ready="true"], [data-failed="true"]) .mark {
     opacity: 1;
+    translate: 0 0;
   }
 
-  /* Without its sky the page is its own colour, and the name takes the
-     theme's ink instead of the sky's. */
-  .account-gate[data-failed="true"] .mark {
-    background: var(--color-text);
+  @media (prefers-reduced-motion: reduce) {
+    .mark {
+      translate: none;
+    }
   }
 
   @media (forced-colors: active) {
@@ -166,9 +177,7 @@
       display: none;
     }
 
-    .mark,
-    .account-gate[data-failed="true"] .mark {
-      background: CanvasText;
+    .mark {
       opacity: 1;
     }
   }
