@@ -90,8 +90,12 @@ const settled = () =>
 
 /** The sky this theme asks for is decoded and showing. */
 async function skied(screen: Screen) {
+  const scene = document.documentElement.dataset.theme === "light" ? "day" : "night";
   await expect
-    .poll(() => screen.container.querySelector('.newtab[data-ready="true"]'), { timeout: 8000 })
+    .poll(
+      () => screen.container.querySelector(`.newtab[data-scene="${scene}"][data-ready="true"]`),
+      { timeout: 8000 },
+    )
     .toBeTruthy();
   await settled();
 }
