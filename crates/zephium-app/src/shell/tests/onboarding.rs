@@ -232,7 +232,9 @@ fn essentials_from_another_browser_join_the_kept_sites_once_each_unloaded() {
         title: title.into(),
     };
     let (send, receive) = std::sync::mpsc::channel();
+    let profile = shell.windows.focused().unwrap().profile;
     shell.handle(Command::Import {
+        profile,
         work: Box::new(crate::ImportWork::Essentials(vec![
             site("https://mail.example/", "Mail"),
             site("https://mail.example/", "Mail again"),
@@ -261,4 +263,149 @@ fn essentials_from_another_browser_join_the_kept_sites_once_each_unloaded() {
         .iter()
         .all(|(id, _)| !shell.items.tab(*id).unwrap().has_view()));
     assert_eq!(active_id(&screen), active);
+}
+
+#[test]
+fn data_safety_import_retains_its_admitted_profile_across_focus_changes() {
+    let (mut shell, _engine, _screen) = setup();
+    shell.handle(Command::Bootstrap);
+    let (send, receive) = std::sync::mpsc::channel();
+    shell.handle(Command::ImportDestination {
+        done: crate::ImportDestinationCompletion::new(move |profile| {
+            send.send(profile).unwrap();
+        }),
+    });
+    let admitted = receive.recv().unwrap().unwrap();
+    let other = add_inactive_named_profile(&mut shell, 89_000);
+    for (index, focused) in [admitted, other].into_iter().enumerate() {
+        shell.windows.focused_mut().unwrap().profile = focused;
+        shell.handle(Command::Import {
+            profile: admitted,
+            work: Box::new(crate::ImportWork::Essentials(vec![crate::ImportedSite {
+                url: format!("https://kind{index}.example/"),
+                title: "Imported".into(),
+            }])),
+            done: crate::ImportCompletion::new(|added| assert_eq!(added, Some(1))),
+        });
+    }
+    assert_eq!(
+        shell
+            .items
+            .roots(Placement::Favorites { profile: admitted })
+            .len(),
+        2
+    );
+    assert!(shell
+        .items
+        .roots(Placement::Favorites { profile: other })
+        .is_empty());
+}
+
+#[test]
+fn import_rejects_private_and_removed_destinations_without_retargeting() {
+    let (mut shell, _engine, _screen) = setup();
+    shell.handle(Command::Bootstrap);
+    let destination = add_inactive_named_profile(&mut shell, 89_200);
+    shell.profiles.remove(destination);
+    let (send, receive) = std::sync::mpsc::channel();
+    shell.handle(Command::Import {
+        profile: destination,
+        work: Box::new(crate::ImportWork::Essentials(vec![])),
+        done: crate::ImportCompletion::new(move |added| {
+            send.send(added).unwrap();
+        }),
+    });
+    assert_eq!(receive.recv().unwrap(), None);
+    shell.handle(Command::Run("window.newPrivate".into()));
+    assert_eq!(shell.import_destination(), None);
+}
+
+#[test]
+fn all_queued_import_kinds_and_icons_keep_one_destination_after_focus_moves() {
+    use zephium_core::bookmarks::{BookmarkReply, BookmarkRequest};
+    use zephium_core::ports::store::ImportedVisit;
+    let directory = tempfile::tempdir().unwrap();
+    let store = Arc::new(zephium_store::SqliteStore::open(directory.path()).unwrap());
+    let mut shell = Shell::new(
+        Arc::new(FakeEngine::default()),
+        store.clone(),
+        Arc::new(FakeChrome),
+        Box::new(|_| {}),
+    );
+    shell.handle(Command::SetWindowSize(Size::new(1200.0, 800.0)));
+    shell.handle(Command::Bootstrap);
+    let destination = shell.import_destination().unwrap();
+    let other = add_inactive_named_profile(&mut shell, 89_400);
+    shell.persist();
+    assert!(store.flush_until(std::time::Instant::now() + std::time::Duration::from_secs(30)));
+    let queue = crate::store_reads::StoreReadQueue::new();
+    shell.store_reads = Some(queue.clone());
+    let work = [
+        crate::ImportWork::Bookmarks {
+            folder: "Imported".into(),
+            nodes: vec![zephium_core::bookmarks::ImportNode::Link {
+                title: "Imported".into(),
+                url: "https://bookmark.example/".into(),
+            }],
+        },
+        crate::ImportWork::History(vec![ImportedVisit {
+            url: "https://import.example/".into(),
+            title: "Imported".into(),
+            visited_at: 1,
+        }]),
+        crate::ImportWork::Icons(vec![(
+            "https://import.example".into(),
+            vec![0x7f; zephium_core::icon::RGBA32_BYTES],
+        )]),
+    ];
+    // Source reads may finish after focus changes between any pair of kinds.
+    for (index, work) in work.into_iter().enumerate() {
+        shell.windows.focused_mut().unwrap().profile = if index == 0 { destination } else { other };
+        shell.handle(Command::Import {
+            profile: destination,
+            work: Box::new(work),
+            done: crate::ImportCompletion::new(|added| assert!(added.is_some())),
+        });
+    }
+    let (send, receive) = std::sync::mpsc::channel();
+    let worker_queue = queue.clone();
+    let worker_store: SharedStore = store.clone();
+    let worker = std::thread::spawn(move || {
+        crate::store_reads::run_for_test(worker_store, worker_queue, send)
+    });
+    let results: Vec<_> = (0..3)
+        .map(|_| {
+            receive
+                .recv_timeout(std::time::Duration::from_secs(10))
+                .unwrap()
+        })
+        .collect();
+    queue.stop();
+    worker.join().unwrap();
+    for result in results {
+        shell.handle(Command::StoreRead(result));
+    }
+    assert!(
+        matches!(store.bookmarks(destination, BookmarkRequest::All), BookmarkReply::Nodes(nodes) if !nodes.is_empty())
+    );
+    assert!(
+        matches!(store.bookmarks(other, BookmarkRequest::All), BookmarkReply::Nodes(nodes) if nodes.is_empty())
+    );
+    assert_eq!(
+        store
+            .history_page_checked(destination, "", None, None, 10)
+            .unwrap()
+            .len(),
+        1
+    );
+    assert!(store
+        .history_page_checked(other, "", None, None, 10)
+        .unwrap()
+        .is_empty());
+    assert!(store
+        .favicon_raster_with_age(destination, "https://import.example")
+        .is_some());
+    assert!(store
+        .favicon_raster_with_age(other, "https://import.example")
+        .is_none());
 }
