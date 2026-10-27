@@ -1079,7 +1079,7 @@ async fn a_service_the_person_connected_is_offered_once_before_its_website() {
     };
     let answering = {
         let handle = handle.clone();
-        tokio::spawn(async move {
+        async move {
             let mut answered = 0;
             loop {
                 tokio::time::sleep(std::time::Duration::from_millis(20)).await;
@@ -1094,21 +1094,47 @@ async fn a_service_the_person_connected_is_offered_once_before_its_website() {
                 let Some(execution) = projection.executions.last() else {
                     continue;
                 };
-                let open = execution.steps.iter().find_map(|step| match &step.kind {
-                    WorkStepKindV1::Ask {
-                        options,
-                        answer: None,
-                        purpose,
-                        ..
-                    } if step.status == WorkStepStatus::Running => {
-                        Some((step.id, options[0].clone(), *purpose))
+                let intent = execution.steps.iter().find_map(|step| {
+                    if step.status != WorkStepStatus::Running {
+                        return None;
                     }
-                    _ => None,
+                    match &step.kind {
+                        WorkStepKindV1::Ask {
+                            options,
+                            answer: None,
+                            purpose,
+                            ..
+                        } => {
+                            assert_eq!(*purpose, Some(WorkAskPurposeV1::Connection));
+                            Some(WorkRuntimeIntent::AnswerStep {
+                                execution: execution.id,
+                                step: step.id,
+                                answer: options[0].clone(),
+                            })
+                        }
+                        WorkStepKindV1::Confirm { confirm } if confirm.decision.is_none() => {
+                            assert_eq!(confirm.site, "slack");
+                            assert_eq!(confirm.action, "run echo");
+                            assert_eq!(confirm.headline, "Echo on Slack?");
+                            assert!(!confirm.run_option);
+                            assert_eq!(
+                                serde_json::from_str::<Value>(confirm.text.as_deref().unwrap())
+                                    .unwrap(),
+                                json!({"text": "mentions"})
+                            );
+                            Some(WorkRuntimeIntent::ApproveStep {
+                                execution: execution.id,
+                                step: step.id,
+                                approve: true,
+                                for_run: false,
+                            })
+                        }
+                        _ => None,
+                    }
                 });
-                let Some((step, first, purpose)) = open else {
+                let Some(intent) = intent else {
                     continue;
                 };
-                assert_eq!(purpose, Some(WorkAskPurposeV1::Connection));
                 answered += 1;
                 let _ = handle
                     .work_command(
@@ -1118,11 +1144,7 @@ async fn a_service_the_person_connected_is_offered_once_before_its_website() {
                             work,
                             expected_revision: projection.work.revision,
                             command: WorkCommandId::generate(),
-                            intent: WorkRuntimeIntent::AnswerStep {
-                                execution: execution.id,
-                                step,
-                                answer: first,
-                            },
+                            intent,
                         },
                     )
                     .unwrap()
@@ -1131,24 +1153,29 @@ async fn a_service_the_person_connected_is_offered_once_before_its_website() {
                     return answered;
                 }
             }
-        })
+        }
     };
-    let done = drive(
-        &mut shell,
-        &queue,
-        WorkLeadService::new(handle.clone()).run(
-            profile,
-            command(work, WorkRevision::INITIAL),
-            None,
-            models,
-            &Search,
-            |_, _| async { panic!("the Slack part never opens the website") },
-            |_| {},
-        ),
+    let service = WorkLeadService::new(handle.clone());
+    let done = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        drive(&mut shell, &queue, async {
+            tokio::select! {
+            result = service.run(
+                profile,
+                command(work, WorkRevision::INITIAL),
+                None,
+                models,
+                &Search,
+                |_, _| async { panic!("the Slack part never opens the website") },
+                |_| {},
+            ) => result,
+            answered = answering => panic!("fixture responder stopped after {answered} answers"),
+            }
+        }),
     )
     .await
+    .expect("the local fixture run must settle after its consent decisions")
     .unwrap();
-    answering.abort();
     let run = &done.executions[0];
     let asks: Vec<&str> = run
         .steps
@@ -1162,10 +1189,31 @@ async fn a_service_the_person_connected_is_offered_once_before_its_website() {
     let slack = &run.parts[0];
     assert_eq!(slack.helper, WorkHelperV1::Connection);
     assert_eq!(slack.state, WorkPartStateV1::Done);
-    assert!(run
+    let confirmations: Vec<_> = run
         .steps
         .iter()
-        .any(|s| matches!(&s.kind, WorkStepKindV1::Call { call } if call.service == "slack")));
+        .filter_map(|step| match &step.kind {
+            WorkStepKindV1::Confirm { confirm } => Some(confirm),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(confirmations.len(), 1);
+    assert_eq!(
+        confirmations[0].decision,
+        Some(WorkConfirmDecisionV1::Approved)
+    );
+    let calls: Vec<_> = run
+        .steps
+        .iter()
+        .filter_map(|step| match &step.kind {
+            WorkStepKindV1::Call { call } => Some((step.status, call)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].0, WorkStepStatus::Succeeded);
+    assert_eq!(calls[0].1.service, "slack");
+    assert_eq!(calls[0].1.tool, "slack__echo");
     let _ = std::fs::remove_dir_all(&data);
 }
 
