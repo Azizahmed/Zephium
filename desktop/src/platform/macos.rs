@@ -611,6 +611,12 @@ pub fn publish_sidebar_resize_revision(revision: u64) -> bool {
     sidebar_resize::publish_revision(revision)
 }
 
+/// How much lower than configured the window controls are put on this
+/// macOS, so they line up with the sidebar's head on every release.
+pub fn window_controls_lift() -> f64 {
+    super::window_controls::inset_lift()
+}
+
 thread_local! {
     /// The windows whose sidebar is hidden. Their controls show only with
     /// the sidebar's card.

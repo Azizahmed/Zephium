@@ -349,13 +349,30 @@ impl WindowControls {
     }
 }
 
-/// The disc a control draws within its frame.
-fn disc(frame: NSRect) -> NSRect {
-    if NSProcessInfo::processInfo()
+/// Whether this is macOS 26 or later, whose titlebar lays the controls out
+/// differently from the releases before it.
+fn redesigned_titlebar() -> bool {
+    NSProcessInfo::processInfo()
         .operatingSystemVersion()
         .majorVersion
         >= 26
-    {
+}
+
+/// How much lower than the configured position the controls are put. The
+/// configured one is measured on the releases before macOS 26; from 26 the
+/// same inset lays them out 3pt higher in the titlebar, above the head they
+/// line up with.
+pub fn inset_lift() -> f64 {
+    if redesigned_titlebar() {
+        3.0
+    } else {
+        0.0
+    }
+}
+
+/// The disc a control draws within its frame.
+fn disc(frame: NSRect) -> NSRect {
+    if redesigned_titlebar() {
         return frame;
     }
     NSInsetRect(
