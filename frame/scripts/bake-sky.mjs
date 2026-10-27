@@ -40,7 +40,13 @@ const FROST_FLATTEN = 0.5;
  *  `veil`, which keeps the interface's ink legible on it. */
 const SCENES = [
   { name: "day", paper: [247, 247, 248], follow: -1.8, veil: [255, 255, 255, 0.25] },
-  { name: "night", paper: [26, 29, 37], follow: 1.1, veil: [5, 8, 20, 0.3] },
+  {
+    name: "night",
+    paper: [26, 29, 37],
+    follow: 1.1,
+    veil: [10, 11, 14, 0.26],
+    glass: { sigma: 2.3, flatten: 0.3, keepColour: true },
+  },
 ];
 
 /** How much of the picture's width, from its left edge, the light beside
@@ -64,6 +70,10 @@ function edgeLight(pixels, width, height) {
     return sum.map((total) => Math.round(total / count));
   });
 }
+
+/** The light of the RGB pixel at `at`. */
+const light = (pixels, at) =>
+  0.2126 * pixels[at] + 0.7152 * pixels[at + 1] + 0.0722 * pixels[at + 2];
 
 /** A separable Gaussian over an RGB float image, clamped at its edges. */
 function blur(pixels, width, height, sigma) {
@@ -90,7 +100,8 @@ function blur(pixels, width, height, sigma) {
   return pass(pass(pixels, true), false);
 }
 
-function frost(name, raw, width, height, veil) {
+function frost(name, raw, width, height, veil, glass = {}) {
+  const { sigma = 3.5, flatten = FROST_FLATTEN, keepColour = false } = glass;
   const small = Math.round((FROST_WIDTH * height) / width);
   const shrunk = execFileSync(
     "ffmpeg",
@@ -115,7 +126,7 @@ function frost(name, raw, width, height, veil) {
     ],
     { maxBuffer: FROST_WIDTH * small * 3 + 1024 },
   );
-  const soft = blur(Float32Array.from(shrunk), FROST_WIDTH, small, 3.5);
+  const soft = blur(Float32Array.from(shrunk), FROST_WIDTH, small, sigma);
   const mean = [0, 1, 2].map((channel) => {
     let sum = 0;
     for (let at = channel; at < soft.length; at += 3) sum += soft[at];
@@ -125,8 +136,13 @@ function frost(name, raw, width, height, veil) {
   const frosted = Buffer.alloc(soft.length);
   for (let at = 0; at < soft.length; at++) {
     const channel = at % 3;
-    const flat = soft[at] + (mean[channel] - soft[at]) * FROST_FLATTEN;
-    frosted[at] = Math.round(flat + ([vr, vg, vb][channel] - flat) * va);
+    // Flattened in its light only, a pixel keeps its own colour: the
+    // graphite under the clouds stays graphite instead of taking the sky's.
+    const flat = keepColour
+      ? soft[at] + (light(mean, 0) - light(soft, at - channel)) * flatten
+      : soft[at] + (mean[channel] - soft[at]) * flatten;
+    const veiled = flat + ([vr, vg, vb][channel] - flat) * va;
+    frosted[at] = Math.round(veiled);
   }
   const file = `${raw}.frost`;
   writeFileSync(file, frosted);
@@ -158,7 +174,7 @@ function frost(name, raw, width, height, veil) {
 
 const smooth = (t) => t * t * (3 - 2 * t);
 
-function bake({ name, paper, follow, veil }) {
+function bake({ name, paper, follow, veil, glass }) {
   const width = WIDTH * SCALE;
   const height = HEIGHT * SCALE;
   const cell = CELL * SCALE;
@@ -288,7 +304,7 @@ function bake({ name, paper, follow, veil }) {
     ],
     { stdio: ["ignore", "ignore", "inherit"] },
   );
-  frost(name, raw, width, height, veil);
+  frost(name, raw, width, height, veil, glass);
   edges[name] = edgeLight(baked, width, height);
   rmSync(scratch, { recursive: true });
 }
