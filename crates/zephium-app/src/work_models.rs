@@ -811,7 +811,11 @@ struct VaultCredential {
 impl LeadCredential for VaultCredential {
     fn secret(&self) -> LeadSecretFuture<'_> {
         Box::pin(async move {
+            let _guard = mutations().lock().await;
             let provider = self.provider;
+            if generation(provider) != self.generation {
+                return Err(WorkModelError::Unauthorized);
+            }
             match blocking(move || vault().load(provider)).await {
                 Some(Ok(secret)) => Ok(secret),
                 Some(Err(keys::LeadKeyError::Missing)) => Err(WorkModelError::MissingKey),
@@ -839,31 +843,43 @@ struct CompatibleCredential {
     generation: u64,
 }
 
+impl CompatibleCredential {
+    async fn load(
+        &self,
+        _guard: &tokio::sync::MutexGuard<'_, ()>,
+    ) -> Result<Arc<LeadSecret>, WorkModelError> {
+        if generation(P::Compatible) != self.generation {
+            return Err(WorkModelError::Unauthorized);
+        }
+        let stored = blocking(|| vault().load(P::Compatible)).await;
+        match stored {
+            Some(Ok(secret)) => Ok(secret),
+            Some(Err(keys::LeadKeyError::Missing)) => {
+                LeadSecret::new("zephium".into()).map(Arc::new)
+            }
+            Some(Err(keys::LeadKeyError::AwaitingApproval)) => {
+                record_failure(
+                    P::Compatible,
+                    self.generation,
+                    Some(WorkKeyFault::KeychainWaiting),
+                );
+                Err(WorkModelError::MissingKey)
+            }
+            _ => {
+                record_failure(P::Compatible, self.generation, Some(WorkKeyFault::Keychain));
+                Err(WorkModelError::MissingKey)
+            }
+        }
+    }
+}
+
 impl LeadCredential for CompatibleCredential {
     fn secret(&self) -> LeadSecretFuture<'_> {
         Box::pin(async move {
-            let stored = blocking(|| vault().load(P::Compatible)).await;
-            match stored {
-                Some(Ok(secret)) => Ok(secret),
-                Some(Err(keys::LeadKeyError::Missing)) => {
-                    LeadSecret::new("zephium".into()).map(Arc::new)
-                }
-                Some(Err(keys::LeadKeyError::AwaitingApproval)) => {
-                    record_failure(
-                        P::Compatible,
-                        self.generation,
-                        Some(WorkKeyFault::KeychainWaiting),
-                    );
-                    Err(WorkModelError::MissingKey)
-                }
-                _ => {
-                    record_failure(P::Compatible, self.generation, Some(WorkKeyFault::Keychain));
-                    Err(WorkModelError::MissingKey)
-                }
-            }
+            let _guard = mutations().lock().await;
+            self.load(&_guard).await
         })
     }
-
     fn rejected(&self) {}
 }
 
@@ -1308,12 +1324,15 @@ pub async fn set_compatible_base(base: Option<&str>) -> Result<(), WorkModelErro
         }
         None => String::new(),
     };
-    if compatible_base().as_deref().unwrap_or_default() != value {
+    let changed = compatible_base().as_deref().unwrap_or_default() != value;
+    if changed {
         blocking(|| vault().clear(P::Compatible))
             .await
             .ok_or(WorkModelError::Unauthorized)?
             .map_err(|_| WorkModelError::Unauthorized)?;
-        let mut state = state();
+    }
+    let mut state = state();
+    if changed {
         *state.generations.entry(P::Compatible).or_default() += 1;
         state.presence.insert(P::Compatible, false);
         state.verdicts.remove(&P::Compatible);
@@ -1323,6 +1342,7 @@ pub async fn set_compatible_base(base: Option<&str>) -> Result<(), WorkModelErro
     if !store_setting(COMPATIBLE_BASE_KEY.to_owned(), value) {
         return Err(WorkModelError::Unauthorized);
     }
+    drop(state);
     notify();
     Ok(())
 }
@@ -1341,7 +1361,7 @@ pub async fn more_models(
         CompatibleCredential {
             generation: current_generation,
         }
-        .secret()
+        .load(&_guard)
         .await?
     } else {
         match blocking(move || vault().load(provider)).await {
@@ -1461,6 +1481,61 @@ mod tests {
     #[tokio::test]
     async fn defaults_choices_failures_and_stale_results_stay_truthful() {
         install_settings(Arc::new(Memory(Mutex::new(HashMap::new()))));
+        set_compatible_base(Some("https://old-provider.example/v1"))
+            .await
+            .unwrap();
+        let retained = CompatibleCredential {
+            generation: generation(P::Compatible),
+        };
+        set_compatible_base(Some("https://new-provider.example/v1"))
+            .await
+            .unwrap();
+        vault()
+            .store(
+                P::Compatible,
+                LeadSecret::new("replacement-key".into()).unwrap(),
+            )
+            .unwrap();
+        assert_eq!(
+            retained.secret().await.err(),
+            Some(WorkModelError::Unauthorized),
+            "a retained endpoint must not receive its replacement's key"
+        );
+        let current = CompatibleCredential {
+            generation: generation(P::Compatible),
+        };
+        assert!(current.secret().await.is_ok());
+        clear_key(P::Compatible).await.unwrap();
+        assert_eq!(
+            current.secret().await.err(),
+            Some(WorkModelError::Unauthorized)
+        );
+        let guard = mutations().lock().await;
+        let queued = CompatibleCredential {
+            generation: generation(P::Compatible),
+        };
+        let waiting = tokio::spawn(async move { queued.secret().await.err() });
+        tokio::task::yield_now().await;
+        assert!(!waiting.is_finished());
+        vault()
+            .store(
+                P::Compatible,
+                LeadSecret::new("rotated-key".into()).unwrap(),
+            )
+            .unwrap();
+        *state().generations.entry(P::Compatible).or_default() += 1;
+        drop(guard);
+        assert_eq!(waiting.await.unwrap(), Some(WorkModelError::Unauthorized));
+        let retained = VaultCredential {
+            provider: P::OpenAi,
+            generation: generation(P::OpenAi),
+        };
+        clear_key(P::OpenAi).await.unwrap();
+        assert_eq!(
+            retained.secret().await.err(),
+            Some(WorkModelError::Unauthorized)
+        );
+        set_compatible_base(None).await.unwrap();
         let profile = ProfileId::from(41_u128);
         with_keys(&[P::OpenAi]);
         apply_check(
