@@ -1,5 +1,6 @@
 //! Native pointer feedback for the Svelte sidebar. Only release changes layout.
 use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
 use std::ptr::NonNull;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -583,6 +584,7 @@ pub(super) fn configure(
     control.ivars().enabled.set(enabled);
     control.ivars().revision.set(revision);
     control.place();
+    keep_over_chrome(&control, chrome);
     let current =
         configuration_current(epoch, generation, revision) && registered(&control, generation);
     let installed = current && enabled && !control.isHidden() && control.window().is_some();
@@ -592,6 +594,54 @@ pub(super) fn configure(
         control.setHidden(true);
     }
     installed
+}
+/// Keeps `control` just over the chrome. Peeking a hidden sidebar stacks the
+/// chrome over the pages, and so over this control too, which then never saw
+/// a press while the frame's own handle stood aside for it.
+fn keep_over_chrome(control: &NSView, chrome: &NSView) {
+    // SAFETY: native parent access is confined to the main thread.
+    let Some(parent) = (unsafe { chrome.superview() }) else {
+        return;
+    };
+    let mut order: Vec<Retained<NSView>> = parent.subviews().to_vec();
+    let rank = |order: &[Retained<NSView>], view: &NSView| {
+        order
+            .iter()
+            .position(|candidate| std::ptr::eq(&**candidate, view))
+    };
+    let (Some(beneath), Some(at)) = (rank(&order, chrome), rank(&order, control)) else {
+        return;
+    };
+    if at > beneath {
+        return;
+    }
+    let moved = order.remove(at);
+    let beneath = rank(&order, chrome).unwrap_or(order.len());
+    order.insert(beneath + 1, moved);
+    let ranks: HashMap<usize, usize> = order
+        .iter()
+        .enumerate()
+        .map(|(rank, view)| (std::ptr::from_ref(&**view).addr(), rank))
+        .collect();
+    unsafe extern "C-unwind" fn by_rank(
+        a: NonNull<NSView>,
+        b: NonNull<NSView>,
+        ranks: *mut std::ffi::c_void,
+    ) -> objc2_foundation::NSComparisonResult {
+        // SAFETY: `ranks` is the map below, alive for the whole sort.
+        let ranks = unsafe { &*(ranks as *const HashMap<usize, usize>) };
+        let rank = |view: NonNull<NSView>| ranks.get(&view.addr().get()).copied();
+        rank(a).cmp(&rank(b)).into()
+    }
+    // SAFETY: the comparator reads only `ranks`, which outlives the call;
+    // AppKit sorts the subviews array in place, without taking any view out
+    // of the window.
+    unsafe {
+        parent.sortSubviewsUsingFunction_context(
+            by_rank,
+            std::ptr::from_ref(&ranks) as *mut std::ffi::c_void,
+        );
+    }
 }
 fn disable() {
     let control = CONTROL.with(|slot| {
