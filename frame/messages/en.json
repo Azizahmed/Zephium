@@ -3690,7 +3690,7 @@
   "assist_suggest_darker": "Make it darker",
   "assist_suggest_readable": "Make it easier to read",
   "assist_step_skipped": "Skipped",
-  "assist_cost_local": "{model} · on this device",
+  "assist_cost_local": "{model} · local server · no usage charge",
   "assist_fault_no_answer": "Zephium came back with nothing to say. Try again, or ask another way.",
   "assist_fault_step_failed": "A step on the page didn’t work.",
   "assist_refusal_no_model": "Choose a model",

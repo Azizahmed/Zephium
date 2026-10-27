@@ -53,6 +53,7 @@ const ROLES: [WorkModelRole; 3] = [
 ];
 const CLOUD_CATALOG_KEY: &str = "work.models.cloud.catalog";
 const COMPATIBLE_BASE_KEY: &str = "work.models.compatible.base";
+const LEGACY_PRICE_ORIGIN_KEY: &str = "work.models.compatible.legacy_price_origin";
 const CLOUD_REFRESH: Duration = Duration::from_secs(60 * 60);
 const CLOUD_RETRY: Duration = Duration::from_secs(30);
 const MAX_STORED_CATALOG_BYTES: usize = 512 * 1024;
@@ -294,7 +295,7 @@ struct State {
     /// failing server is not asked again on every read.
     cloud_tried: Option<Instant>,
     /// Choices kept in memory when no settings store is installed.
-    choices: HashMap<String, WorkModelEntry>,
+    choices: HashMap<String, StoredChoice>,
     efforts: HashMap<String, String>,
 }
 
@@ -532,36 +533,70 @@ fn entries(state: &State) -> Vec<WorkModelEntry> {
     all
 }
 
+// Persist pricing provenance privately alongside the existing choice fields.
+// Absent metadata denotes legacy choices whose zero price may have been local-derived.
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+struct StoredChoice {
+    #[serde(flatten)]
+    entry: WorkModelEntry,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    local_price: Option<bool>,
+    /// The endpoint whose listing supplied this price; absent for legacy choices.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pricing_endpoint: Option<String>,
+}
+
 fn stored_choice(state: &State, profile: ProfileId, role: WorkModelRole) -> Option<WorkModelEntry> {
     let key = choice_key(profile, role);
-    let stored: WorkModelEntry = match setting(&key) {
+    let mut stored: StoredChoice = match setting(&key) {
         Some(text) => serde_json::from_str(&text).ok()?,
         None => state.choices.get(&key).cloned()?,
     };
-    // Keep an explicit choice even if it disappeared; never silently replace it.
-    let local = compatible_base().is_some_and(|base| is_local(&base));
-    Some(priced_locally(
-        entries(state)
-            .into_iter()
-            .chain(state.listed.values().flatten().cloned())
-            .find(|entry| entry.id == stored.id)
-            .unwrap_or(stored),
-        local,
-    ))
+    let endpoint = compatible_base().map(|base| base.trim().trim_end_matches('/').to_owned());
+    let local = endpoint.as_ref().is_some_and(|base| is_local(base));
+    if stored.entry.model.provider == P::Compatible && stored.pricing_endpoint.is_none() {
+        // Old local_price described the endpoint class, not whether a price
+        // was synthesized. The immutable anchor binds even unopened profiles;
+        // resolving a saved choice never needs to write its setting.
+        let origin = setting(LEGACY_PRICE_ORIGIN_KEY)
+            .map(|text| serde_json::from_str::<Option<String>>(&text).unwrap_or_default())
+            .unwrap_or_else(|| endpoint.clone());
+        if let (Some(was_local), Some(origin)) = (stored.local_price, origin.as_ref()) {
+            if was_local != is_local(origin) {
+                stored.entry.price = None;
+            }
+        }
+        stored.pricing_endpoint = Some(origin.unwrap_or_default());
+    }
+    // A current listing is authoritative, including an explicit remote zero price.
+    let entry = entries(state)
+        .into_iter()
+        .chain(state.listed.values().flatten().cloned())
+        .find(|entry| entry.id == stored.entry.id)
+        .unwrap_or_else(|| {
+            // Keep an unavailable choice, but do not carry local-derived or
+            // unclassified legacy zero pricing to a remote endpoint.
+            let mut entry = stored.entry;
+            if entry.model.provider == P::Compatible {
+                let changed_endpoint = stored.pricing_endpoint.as_ref().is_some_and(|origin| {
+                    origin.as_str() != endpoint.as_deref().unwrap_or_default()
+                });
+                let unproven_zero =
+                    !local && entry.is_free_compatible() && stored.local_price != Some(false);
+                if changed_endpoint || unproven_zero {
+                    entry.price = None;
+                }
+            }
+            entry
+        });
+    Some(priced_locally(entry, local))
 }
 
-/// A server on this computer, such as Ollama or LM Studio.
 fn is_local(base: &str) -> bool {
-    ["http://localhost", "http://127.0.0.1", "http://[::1]"]
-        .iter()
-        .any(|origin| {
-            base.strip_prefix(origin)
-                .is_some_and(|rest| rest.is_empty() || rest.starts_with([':', '/']))
-        })
+    zephium_core::work::model::local_model_endpoint(base)
 }
 
-/// A model on this computer costs nothing per token. Unpriced, it would be
-/// charged the conservative fallback and stop a run on money never spent.
+/// Unpriced local models are free; explicit rates remain authoritative.
 fn priced_locally(mut entry: WorkModelEntry, local: bool) -> WorkModelEntry {
     if local && entry.model.provider == P::Compatible && entry.price.is_none() {
         entry.price = Some(WorkModelPrice {
@@ -1129,7 +1164,26 @@ pub fn choose(
             if !entry.roles.contains(&role) && !entry.roles.contains(&WorkModelRole::Lead) {
                 return Err(WorkModelError::BadRequest);
             }
-            serde_json::to_string(&entry).map_err(|_| WorkModelError::BadRequest)?
+            let pricing_endpoint = (entry.model.provider == P::Compatible)
+                .then(compatible_base)
+                .flatten()
+                .map(|base| base.trim().trim_end_matches('/').to_owned());
+            let local_price = (entry.model.provider == P::Compatible).then(|| {
+                pricing_endpoint.as_ref().is_some_and(|base| is_local(base))
+                    && state
+                        .listed
+                        .get(&P::Compatible)
+                        .into_iter()
+                        .flatten()
+                        .find(|listed| listed.id == entry.id)
+                        .is_some_and(|listed| listed.price.is_none())
+            });
+            serde_json::to_string(&StoredChoice {
+                entry,
+                local_price,
+                pricing_endpoint,
+            })
+            .map_err(|_| WorkModelError::BadRequest)?
         }
     };
     if SETTINGS.read().ok().is_some_and(|slot| slot.is_some())
@@ -1324,7 +1378,19 @@ pub async fn set_compatible_base(base: Option<&str>) -> Result<(), WorkModelErro
         }
         None => String::new(),
     };
-    let changed = compatible_base().as_deref().unwrap_or_default() != value;
+    let changed = {
+        let _state = state();
+        let changed = compatible_base().as_deref().unwrap_or_default() != value;
+        // A failed anchor must leave the old endpoint and credential usable.
+        if changed && setting(LEGACY_PRICE_ORIGIN_KEY).is_none() {
+            let origin = compatible_base().map(|base| base.trim().trim_end_matches('/').to_owned());
+            let origin = serde_json::to_string(&origin).map_err(|_| WorkModelError::BadRequest)?;
+            if !store_setting(LEGACY_PRICE_ORIGIN_KEY.to_owned(), origin) {
+                return Err(WorkModelError::Unauthorized);
+            }
+        }
+        changed
+    };
     if changed {
         blocking(|| vault().clear(P::Compatible))
             .await
@@ -1332,15 +1398,16 @@ pub async fn set_compatible_base(base: Option<&str>) -> Result<(), WorkModelErro
             .map_err(|_| WorkModelError::Unauthorized)?;
     }
     let mut state = state();
+    // Preserve a committed anchor even if the base write fails.
+    if !store_setting(COMPATIBLE_BASE_KEY.to_owned(), value) {
+        return Err(WorkModelError::Unauthorized);
+    }
     if changed {
         *state.generations.entry(P::Compatible).or_default() += 1;
         state.presence.insert(P::Compatible, false);
         state.verdicts.remove(&P::Compatible);
         state.faults.remove(&P::Compatible);
         state.listed.remove(&P::Compatible);
-    }
-    if !store_setting(COMPATIBLE_BASE_KEY.to_owned(), value) {
-        return Err(WorkModelError::Unauthorized);
     }
     drop(state);
     notify();
@@ -1401,8 +1468,27 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_model_on_this_computer_costs_nothing_and_a_remote_one_stays_unpriced() {
-        assert!(is_local("http://localhost:11434/v1"));
+    fn local_pricing_preserves_explicit_rates_and_defaults_only_unknown_prices() {
+        for base in [
+            "http://localhost:11434/v1",
+            "https://localhost/v1",
+            "https://127.0.0.2/v1",
+            "https://192.168.1.5/v1",
+            "https://10.2.3.4/v1",
+            "https://172.16.1.2/v1",
+            "https://[fd12::1]/v1",
+            "https://lmstudio.local/v1",
+        ] {
+            assert!(is_local(base), "{base}");
+        }
+        for base in [
+            "https://172.32.1.2/v1",
+            "https://localhost.example/v1",
+            "https://192.168.1.5.example/v1",
+            "ftp://localhost/v1",
+        ] {
+            assert!(!is_local(base), "{base}");
+        }
         assert!(is_local("http://127.0.0.1:1234/v1"));
         assert!(is_local("http://[::1]:11434"));
         assert!(!is_local("http://localhost.example.com/v1"));
@@ -1419,7 +1505,12 @@ mod tests {
                 ..entry
             })
             .unwrap();
-        let free = priced_locally(entry.clone(), true).price.unwrap();
+        let resolved = priced_locally(entry.clone(), true);
+        assert!(
+            priced_locally(resolved.clone(), false).is_free_compatible(),
+            "an explicit zero price from a remote model list must survive"
+        );
+        let free = resolved.price.unwrap();
         assert_eq!((free.input, free.cached_input, free.output), (0, 0, 0));
         assert!(priced_locally(entry.clone(), false).price.is_none());
         let priced = WorkModelEntry {
@@ -1430,8 +1521,48 @@ mod tests {
             }),
             ..entry
         };
-        let price = priced_locally(priced, true).price.unwrap();
-        assert_eq!((price.input, price.cached_input, price.output), (10, 5, 20));
+        for base in [
+            "http://localhost:11434/v1",
+            "https://192.168.1.5/v1",
+            "http://100.64.1.2/v1",
+            "http://host.docker.internal/v1",
+            "https://lmstudio.local/v1",
+            "https://models.example.com/v1",
+        ] {
+            let price = priced_locally(priced.clone(), is_local(base))
+                .price
+                .unwrap();
+            assert_eq!(
+                (price.input, price.cached_input, price.output),
+                (10, 5, 20),
+                "{base}"
+            );
+        }
+        for price in [
+            WorkModelPrice {
+                input: 1,
+                cached_input: 0,
+                output: 0,
+            },
+            WorkModelPrice {
+                input: 0,
+                cached_input: 1,
+                output: 0,
+            },
+            WorkModelPrice {
+                input: 0,
+                cached_input: 0,
+                output: 1,
+            },
+        ] {
+            let entry = WorkModelEntry {
+                price: Some(price.clone()),
+                ..priced.clone()
+            };
+            let resolved = priced_locally(entry, true);
+            assert!(!resolved.is_free_compatible());
+            assert_eq!(resolved.price, Some(price));
+        }
     }
 
     #[derive(Default)]
@@ -1467,6 +1598,19 @@ mod tests {
         fn set(&self, key: String, value: String) -> bool {
             self.0.lock().unwrap().insert(key, value);
             true
+        }
+    }
+
+    struct RejectWrite {
+        inner: Arc<dyn WorkModelSettings>,
+        key: String,
+    }
+    impl WorkModelSettings for RejectWrite {
+        fn get(&self, key: &str) -> Option<String> {
+            self.inner.get(key)
+        }
+        fn set(&self, key: String, value: String) -> bool {
+            key != self.key && self.inner.set(key, value)
         }
     }
 
@@ -1652,7 +1796,321 @@ mod tests {
         for role in ROLES {
             assert!(effective(&state(), other, role).unwrap().price.is_none());
         }
+        // Fresh remote listings are authoritative, including explicit zero.
+        state().listed.get_mut(&P::Compatible).unwrap()[0].price = Some(WorkModelPrice {
+            input: 0,
+            cached_input: 0,
+            output: 0,
+        });
+        for role in ROLES {
+            assert!(effective(&state(), other, role)
+                .unwrap()
+                .is_free_compatible());
+        }
+        let id = "compatible/local-model";
+        choose(other, WorkModelRole::Lead, Some(id)).unwrap();
+        // A restart drops session listings and memory choices, not persisted pricing provenance.
+        with_keys(&[]);
+        assert!(
+            stored_choice(&state(), other, WorkModelRole::Lead)
+                .unwrap()
+                .is_free_compatible(),
+            "explicit remote zero prices survive restart"
+        );
+        // Choices made under a local endpoint must not retain derived zero when it becomes remote.
+        assert!(store_setting(
+            COMPATIBLE_BASE_KEY.into(),
+            "http://localhost:1234/v1".into()
+        ));
+        let mut local = stored_choice(&state(), other, WorkModelRole::Lead).unwrap();
+        local.price = None;
+        state().listed.insert(P::Compatible, vec![local]);
+        choose(other, WorkModelRole::Page, Some(id)).unwrap();
+        with_keys(&[]);
+        assert!(store_setting(
+            COMPATIBLE_BASE_KEY.into(),
+            "https://models.example.com/v1".into()
+        ));
+        assert!(stored_choice(&state(), other, WorkModelRole::Page)
+            .unwrap()
+            .price
+            .is_none());
+        // An old choice has no provenance: retain conservative pricing unless freshly listed.
+        let mut legacy = stored_choice(&state(), other, WorkModelRole::Lead).unwrap();
+        legacy.price = Some(WorkModelPrice {
+            input: 0,
+            cached_input: 0,
+            output: 0,
+        });
+        assert!(store_setting(
+            choice_key(other, WorkModelRole::Light),
+            serde_json::to_string(&legacy).unwrap()
+        ));
+        assert!(stored_choice(&state(), other, WorkModelRole::Light)
+            .unwrap()
+            .price
+            .is_none());
+        state().listed.insert(P::Compatible, vec![legacy]);
+        for role in ROLES {
+            assert!(
+                stored_choice(&state(), other, role)
+                    .unwrap()
+                    .is_free_compatible(),
+                "fresh explicit prices supersede stale or unclassified stored prices"
+            );
+            choose(other, role, None).unwrap();
+        }
+        let rate = WorkModelPrice {
+            input: 10,
+            cached_input: 5,
+            output: 20,
+        };
+        let mut billed = state().listed.get(&P::Compatible).unwrap()[0].clone();
+        billed.price = Some(rate.clone());
+        state().listed.insert(P::Compatible, vec![billed]);
+        assert!(store_setting(
+            COMPATIBLE_BASE_KEY.into(),
+            "http://100.64.1.2/v1".into()
+        ));
+        choose(other, WorkModelRole::Lead, Some(id)).unwrap();
+        with_keys(&[]);
+        assert_eq!(
+            stored_choice(&state(), other, WorkModelRole::Lead)
+                .unwrap()
+                .price,
+            Some(rate.clone())
+        );
+        assert!(store_setting(
+            COMPATIBLE_BASE_KEY.into(),
+            "https://models.example.com/v1".into()
+        ));
+        assert!(
+            stored_choice(&state(), other, WorkModelRole::Lead)
+                .unwrap()
+                .price
+                .is_none(),
+            "a different endpoint must re-list its own explicit rates"
+        );
+        choose(other, WorkModelRole::Lead, None).unwrap();
         assert!(store_setting(COMPATIBLE_BASE_KEY.into(), String::new()));
+        // Legacy explicit rates bind to the unchanged endpoint, including zero;
+        // an unopened profile binds to the immutable pre-change origin instead.
+        assert!(store_setting(LEGACY_PRICE_ORIGIN_KEY.into(), String::new()));
+        assert!(store_setting(
+            COMPATIBLE_BASE_KEY.into(),
+            "https://legacy-price.example/v1".into()
+        ));
+        for rate in [
+            WorkModelPrice {
+                input: 0,
+                cached_input: 0,
+                output: 0,
+            },
+            WorkModelPrice {
+                input: 11,
+                cached_input: 4,
+                output: 21,
+            },
+        ] {
+            let row = WorkModelEntry {
+                id: "compatible/legacy-price".into(),
+                model: WorkModelRef {
+                    provider: P::Compatible,
+                    ..models::builtin().into_iter().next().unwrap().model
+                },
+                roles: ROLES.to_vec(),
+                price: Some(rate.clone()),
+                ..models::builtin().into_iter().next().unwrap()
+            };
+            let legacy = serde_json::to_string(&StoredChoice {
+                entry: row,
+                local_price: Some(false),
+                pricing_endpoint: None,
+            })
+            .unwrap();
+            assert!(store_setting(
+                choice_key(other, WorkModelRole::Lead),
+                legacy.clone()
+            ));
+            assert!(store_setting(
+                choice_key(other, WorkModelRole::Page),
+                legacy
+            ));
+            let writable = SETTINGS.read().unwrap().clone().unwrap();
+            install_settings(Arc::new(RejectWrite {
+                inner: writable.clone(),
+                key: choice_key(other, WorkModelRole::Lead),
+            }));
+            let retained = stored_choice(&state(), other, WorkModelRole::Lead)
+                .expect("a choice must remain readable when its setting cannot be written");
+            assert_eq!(retained.id, "compatible/legacy-price");
+            assert_eq!(retained.price, Some(rate));
+            set_compatible_base(Some("https://legacy-price-new.example/v1"))
+                .await
+                .unwrap();
+            assert!(stored_choice(&state(), other, WorkModelRole::Lead)
+                .unwrap()
+                .price
+                .is_none());
+            assert!(stored_choice(&state(), other, WorkModelRole::Page)
+                .unwrap()
+                .price
+                .is_none());
+            assert_eq!(
+                stored_choice(&state(), other, WorkModelRole::Lead)
+                    .unwrap()
+                    .id,
+                "compatible/legacy-price"
+            );
+            install_settings(writable);
+            choose(other, WorkModelRole::Lead, None).unwrap();
+            choose(other, WorkModelRole::Page, None).unwrap();
+            assert!(store_setting(LEGACY_PRICE_ORIGIN_KEY.into(), String::new()));
+            assert!(store_setting(
+                COMPATIBLE_BASE_KEY.into(),
+                "https://legacy-price.example/v1".into()
+            ));
+        }
+        assert!(store_setting(LEGACY_PRICE_ORIGIN_KEY.into(), String::new()));
+        assert!(store_setting(
+            COMPATIBLE_BASE_KEY.into(),
+            "https://anchor-old.example/v1".into()
+        ));
+        vault()
+            .store(
+                P::Compatible,
+                LeadSecret::new("anchor-existing-key".into()).unwrap(),
+            )
+            .unwrap();
+        let previous = SETTINGS.read().unwrap().clone().unwrap();
+        install_settings(Arc::new(RejectWrite {
+            inner: previous.clone(),
+            key: LEGACY_PRICE_ORIGIN_KEY.into(),
+        }));
+        assert_eq!(
+            set_compatible_base(Some("https://anchor-new.example/v1"))
+                .await
+                .err(),
+            Some(WorkModelError::Unauthorized)
+        );
+        assert_eq!(
+            compatible_base().as_deref(),
+            Some("https://anchor-old.example/v1")
+        );
+        assert!(
+            vault().load(P::Compatible).is_ok(),
+            "a failed anchor write cleared the existing credential"
+        );
+        install_settings(Arc::new(RejectWrite {
+            inner: previous.clone(),
+            key: COMPATIBLE_BASE_KEY.into(),
+        }));
+        assert_eq!(
+            set_compatible_base(Some("https://anchor-new.example/v1"))
+                .await
+                .err(),
+            Some(WorkModelError::Unauthorized)
+        );
+        assert_eq!(
+            compatible_base().as_deref(),
+            Some("https://anchor-old.example/v1")
+        );
+        assert_eq!(
+            serde_json::from_str::<Option<String>>(&setting(LEGACY_PRICE_ORIGIN_KEY).unwrap())
+                .unwrap()
+                .as_deref(),
+            Some("https://anchor-old.example/v1")
+        );
+        install_settings(previous);
+        // Endpoint changes invalidate the previous listing's pricing, including
+        // local-to-local changes and a later return to the original endpoint.
+        for explicit in [
+            None,
+            Some(WorkModelPrice {
+                input: 0,
+                cached_input: 0,
+                output: 0,
+            }),
+            Some(WorkModelPrice {
+                input: 10,
+                cached_input: 5,
+                output: 20,
+            }),
+        ] {
+            set_compatible_base(Some("https://pricing-first.example/v1"))
+                .await
+                .unwrap();
+            let mut row = models::builtin().into_iter().next().unwrap();
+            row.id = "compatible/pricing-origin".into();
+            row.model.provider = P::Compatible;
+            row.roles = ROLES.to_vec();
+            row.price = explicit.clone();
+            state().listed.insert(P::Compatible, vec![row.clone()]);
+            choose(other, WorkModelRole::Lead, Some(&row.id)).unwrap();
+            assert_eq!(
+                stored_choice(&state(), other, WorkModelRole::Lead)
+                    .unwrap()
+                    .price,
+                explicit
+            );
+            set_compatible_base(Some("http://localhost:1234/v1"))
+                .await
+                .unwrap();
+            assert!(stored_choice(&state(), other, WorkModelRole::Lead)
+                .unwrap()
+                .is_free_compatible());
+            row.price = explicit.clone();
+            state().listed.insert(P::Compatible, vec![row.clone()]);
+            choose(other, WorkModelRole::Lead, Some(&row.id)).unwrap();
+            with_keys(&[]);
+            let same_endpoint = stored_choice(&state(), other, WorkModelRole::Lead).unwrap();
+            assert_eq!(
+                same_endpoint.price,
+                explicit.clone().or(Some(WorkModelPrice {
+                    input: 0,
+                    cached_input: 0,
+                    output: 0
+                }))
+            );
+            set_compatible_base(Some("http://localhost:5678/v1"))
+                .await
+                .unwrap();
+            assert!(
+                stored_choice(&state(), other, WorkModelRole::Lead)
+                    .unwrap()
+                    .is_free_compatible(),
+                "a different local endpoint must not inherit an old explicit charge"
+            );
+            set_compatible_base(Some("https://pricing-second.example/v1"))
+                .await
+                .unwrap();
+            assert!(
+                stored_choice(&state(), other, WorkModelRole::Lead)
+                    .unwrap()
+                    .price
+                    .is_none(),
+                "local-derived or old-endpoint prices must not reach the remote endpoint"
+            );
+            set_compatible_base(Some("http://localhost:1234/v1"))
+                .await
+                .unwrap();
+            set_compatible_base(Some("https://pricing-first.example/v1"))
+                .await
+                .unwrap();
+            assert!(stored_choice(&state(), other, WorkModelRole::Lead)
+                .unwrap()
+                .price
+                .is_none());
+            row.price = explicit.clone();
+            state().listed.insert(P::Compatible, vec![row]);
+            assert_eq!(
+                stored_choice(&state(), other, WorkModelRole::Lead)
+                    .unwrap()
+                    .price,
+                explicit
+            );
+            choose(other, WorkModelRole::Lead, None).unwrap();
+        }
         // All test secret operations use the injected memory vault.
         vault()
             .store(P::OpenAi, LeadSecret::new("test-key".into()).unwrap())

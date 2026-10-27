@@ -3649,6 +3649,11 @@ export type WorkActivityV1 = "planning" | "delegating" | "searching" | "reading"
 export type WorkAgentGrantV1 = WorkAgentGrantV1_Serialize | WorkAgentGrantV1_Deserialize;
 
 export type WorkAgentGrantV1_Deserialize = {
+	/**
+	 *  Trusted resolved pricing fact: all models are free and browser search
+	 *  has no paid fallback. This grants no capability or disclosure authority.
+	 */
+	no_usage_charge?: boolean,
 	provider: WorkSearchProvider,
 	model: string,
 	max_turns: number,
@@ -3686,6 +3691,11 @@ export type WorkAgentGrantV1_Deserialize = {
 };
 
 export type WorkAgentGrantV1_Serialize = {
+	/**
+	 *  Trusted resolved pricing fact: all models are free and browser search
+	 *  has no paid fallback. This grants no capability or disclosure authority.
+	 */
+	no_usage_charge?: boolean,
 	provider: WorkSearchProvider,
 	model: string,
 	max_turns: number,
@@ -4007,6 +4017,8 @@ export type WorkAttemptFact = {
 	/**
 	 *  Reservation is retained for unknown outcomes. Settled accounting names
 	 *  exact usage or a conservative ceiling; missing means unknown, never zero.
+	 *  A trusted no-charge agent may retain a known-zero monetary reservation
+	 *  while its token counts and native outcome remain uncertain.
 	 */
 	usage: WorkUsage | null,
 };
