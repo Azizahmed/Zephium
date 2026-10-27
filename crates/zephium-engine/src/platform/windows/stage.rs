@@ -181,10 +181,39 @@ struct State {
     fullscreen: Option<ItemId>,
     /// The chrome's host window, once a hidden sidebar's card has needed it.
     chrome: Option<HWND>,
-    /// Where the hidden sidebar's card stands over the page, while it does,
-    /// and what has been cut to for it.
+    /// Where the hidden sidebar's card stands over the page, while the
+    /// chrome is up for it, and what has been cut to for it.
     card: Option<Rect>,
-    card_clip: Option<(PhysicalRect, i32)>,
+    card_clip: Option<(PhysicalRect, i32, Vec<PhysicalRect>)>,
+    /// The card on its way in or out, and the timer that steps the cut.
+    card_motion: Option<CardMotion>,
+    card_tick: Option<super::ContentPolicyTimeout>,
+}
+
+/// A hidden sidebar's card sliding in or out, as the share of its slide that
+/// lies between it and its place: 0 over the page, 1 out of sight beside the
+/// window. The frame slides the card; the chrome's cut follows it there.
+#[derive(Clone, Copy, Debug)]
+struct CardMotion {
+    started: Instant,
+    from: f64,
+    to: f64,
+}
+
+/// How far past its own width the card waits beside the window, as the
+/// frame's `translate: calc(-100% - 24px)` puts it.
+const CARD_AWAY: f64 = 24.0;
+
+impl CardMotion {
+    /// The share still to go, and whether the card has arrived.
+    fn at(&self, now: Instant) -> (f64, bool) {
+        let elapsed = now.saturating_duration_since(self.started);
+        if elapsed >= SLIDE {
+            return (self.to, true);
+        }
+        let progress = EMPHASIZED.at(elapsed.as_secs_f64() / SLIDE.as_secs_f64());
+        (self.from + (self.to - self.from) * progress, false)
+    }
 }
 
 /// The page travelling beside the sidebar. Child windows cannot be moved by
@@ -394,6 +423,8 @@ impl Stage {
             chrome: None,
             card: None,
             card_clip: None,
+            card_motion: None,
+            card_tick: None,
         }));
         CAPTION_STAGES.with(|stages| {
             stages
@@ -634,12 +665,33 @@ impl Stage {
     }
 
     /// Brings the chrome over the pages inside the card of a hidden sidebar,
-    /// or puts it back beneath them.
-    pub fn raise_chrome(&self, raised: bool, card: Rect) {
+    /// or puts it back beneath them. With `slide`, the cut follows the card
+    /// in, or out before the chrome goes back beneath; a card turned back
+    /// part way goes from where it has got to.
+    pub fn raise_chrome(&self, raised: bool, card: Rect, slide: bool) {
         let Ok(mut state) = self.state.try_borrow_mut() else {
             return;
         };
-        state.card = raised.then_some(card);
+        let now = Instant::now();
+        let away = match (state.card, state.card_motion) {
+            (None, _) => 1.0,
+            (Some(_), Some(motion)) => motion.at(now).0,
+            (Some(_), None) => 0.0,
+        };
+        let to = if raised { 0.0 } else { 1.0 };
+        if slide && away != to {
+            if state.card_motion.is_none_or(|motion| motion.to != to) {
+                state.card_motion = Some(CardMotion {
+                    started: now,
+                    from: away,
+                    to,
+                });
+            }
+            state.card = Some(card);
+        } else {
+            state.card_motion = None;
+            state.card = raised.then_some(card);
+        }
         drop(state);
         settle_card(&self.state);
     }
@@ -1540,9 +1592,22 @@ fn sync(state: &Rc<RefCell<State>>) {
 /// the card's shadow on the pages, for as long as the card is out; and puts
 /// it back as it was when it is not. A fullscreen page stays above all.
 fn settle_card(state: &Rc<RefCell<State>>) {
-    let (parent, card, chrome, clip, pages) = {
-        let Ok(state) = state.try_borrow() else {
+    let (parent, card, chrome, clip, pages, away, moving) = {
+        let Ok(mut state) = state.try_borrow_mut() else {
             return;
+        };
+        let (away, moving) = match state.card_motion {
+            Some(motion) => {
+                let (away, arrived) = motion.at(Instant::now());
+                if arrived {
+                    state.card_motion = None;
+                    if motion.to >= 1.0 {
+                        state.card = None;
+                    }
+                }
+                (away, !arrived)
+            }
+            None => (0.0, false),
         };
         let pages: Vec<(HWND, Option<PhysicalRect>)> = state
             .views
@@ -1557,10 +1622,15 @@ fn settle_card(state: &Rc<RefCell<State>>) {
             state.parent,
             state.card.filter(|_| state.fullscreen.is_none()),
             state.chrome,
-            state.card_clip,
+            state.card_clip.clone(),
             pages,
+            away,
+            moving,
         )
     };
+    if moving {
+        step_card(state);
+    }
     let Some(card) = card else {
         if clip.is_some() {
             let lowered = chrome.is_none_or(|chrome| {
@@ -1581,10 +1651,13 @@ fn settle_card(state: &Rc<RefCell<State>>) {
     if unsafe { GetClientRect(parent, &mut client) }.is_err() {
         return;
     }
-    let Some(rect) = crate::card_geometry::card_pixels(card, (client.right, client.bottom), scale)
+    let Some(placed) =
+        crate::card_geometry::card_pixels(card, (client.right, client.bottom), scale)
     else {
         return;
     };
+    let travel = ((card.width + CARD_AWAY) * scale * away).round() as i32;
+    let rect = (placed.0 - travel, placed.1, placed.2, placed.3);
     let chrome = match chrome.filter(|chrome| super::sidebar_card::is_live(*chrome)) {
         Some(chrome) => chrome,
         None => {
@@ -1599,9 +1672,19 @@ fn settle_card(state: &Rc<RefCell<State>>) {
         }
     };
     let diameter = ((RADIUS * scale * 2.0).round() as i32).max(1);
-    if clip != Some((rect, diameter)) && super::sidebar_card::clip_chrome(chrome, rect, diameter) {
+    let shown: Vec<PhysicalRect> = pages.iter().filter_map(|(_, rect)| *rect).collect();
+    let key = (rect, diameter, shown);
+    if clip.as_ref() != Some(&key)
+        && super::sidebar_card::clip_chrome(
+            parent,
+            chrome,
+            (client.right, client.bottom),
+            rect,
+            diameter,
+        )
+    {
         if let Ok(mut state) = state.try_borrow_mut() {
-            state.card_clip = Some((rect, diameter));
+            state.card_clip = Some(key);
         }
     }
     if !super::sidebar_card::is_on_top(parent, chrome) {
@@ -1617,6 +1700,45 @@ fn settle_card(state: &Rc<RefCell<State>>) {
         })
         .collect();
     super::sidebar_card::cast(&placements, rect, scale, dark_theme(parent));
+}
+
+/// Moves the card's cut on by a display frame's worth, on the stage's own
+/// frame-paced timer, until the card arrives.
+fn step_card(state: &Rc<RefCell<State>>) {
+    if state
+        .try_borrow()
+        .map_or(true, |state| state.card_tick.is_some())
+    {
+        return;
+    }
+    let weak = Rc::downgrade(state);
+    let tick = super::schedule_browser_timeout(Duration::from_millis(1), move || {
+        let Some(state) = weak.upgrade() else {
+            return;
+        };
+        if let Ok(mut current) = state.try_borrow_mut() {
+            current.card_tick = None;
+        }
+        settle_card(&state);
+    });
+    if tick.is_none() {
+        // With no timer to step it, the card's cut goes straight to where the
+        // card is going rather than staying part way.
+        if let Ok(mut current) = state.try_borrow_mut() {
+            if current
+                .card_motion
+                .take()
+                .is_some_and(|motion| motion.to >= 1.0)
+            {
+                current.card = None;
+            }
+        }
+        settle_card(state);
+        return;
+    }
+    if let Ok(mut current) = state.try_borrow_mut() {
+        current.card_tick = tick;
+    }
 }
 
 /// Narrows a page's rounded region to the part of it inside the stage.

@@ -355,6 +355,7 @@
   /* Matches the native content view's layer radius, so the new tab pane and a
      live page occupy the same shape. Changing one requires changing both. */
   --content-radius: 12px;
+  --content-radius-windows: 8px; /* how Windows rounds a page, and so a card cut over it */
 
   /* Traffic lights sit at window (7, 22) and the chrome WebView starts at the
      8px window padding, so within the chrome they span y 14..28 and end near

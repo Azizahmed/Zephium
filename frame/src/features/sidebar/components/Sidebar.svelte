@@ -173,8 +173,13 @@
   let peeking = $state(false);
   let atEdge = false;
   /** Windows cannot blend the chrome over a page, so it cuts the chrome to
-   *  the card: the card is there or not, and does not slide. */
+   *  the card, and the cut follows the card as it slides: a little behind it
+   *  on the way in and a little ahead on the way out, so nothing past the
+   *  card is ever uncovered. */
   const CUT_TO_CARD = IS_WINDOWS;
+  /** About two display frames: how far the cut keeps behind or ahead. */
+  const CUT_LEAD_MS = 34;
+  const slides = () => !reducedMotion();
   /** Once out, the card stays a moment whatever the pointer does: it is
    *  still arriving, and a hand settling onto it should not send it back. */
   const SETTLE_MS = 520;
@@ -190,23 +195,22 @@
     lowered = undefined;
     if (!peeking) opened = performance.now();
     if (peeking) {
-      void commands.sidebarPeek(true, true);
+      void commands.sidebarPeek(true, true, slides());
       return;
     }
     if (CUT_TO_CARD) {
-      // Cut to the card, the chrome shows only what is drawn there, so the
-      // card is in place before it is brought over the page.
+      // The card sets off first, so the cut never runs ahead of it.
       peeking = true;
       requestAnimationFrame(() =>
         requestAnimationFrame(() => {
-          if (away && peeking) void commands.sidebarPeek(true, true);
+          if (away && peeking) void commands.sidebarPeek(true, true, slides());
         }),
       );
       return;
     }
     // Native stacks the chrome over the page before the card slides in, so
     // the slide is seen from its first frame.
-    void commands.sidebarPeek(true, true).then(() =>
+    void commands.sidebarPeek(true, true, false).then(() =>
       requestAnimationFrame(() => {
         if (away) peeking = true;
       }),
@@ -227,21 +231,21 @@
       () => {
         if (pointerIn || atEdge || needed()) return;
         if (CUT_TO_CARD) {
-          // Beneath the page first, so the card is never seen leaving its cut.
-          void commands.sidebarPeek(false, false);
+          // The cut sets off first, so the card never runs past it.
+          void commands.sidebarPeek(false, false, slides());
           lowered = setTimeout(() => {
-            lowered = undefined;
             peeking = false;
-          }, 80);
+            lowered = setTimeout(() => (lowered = undefined), duration("page"));
+          }, CUT_LEAD_MS);
           return;
         }
         peeking = false;
         // The controls go as the card starts to; the chrome goes back beneath
         // the page once the card has slid away.
-        void commands.sidebarPeek(true, false);
+        void commands.sidebarPeek(true, false, false);
         lowered = setTimeout(() => {
           lowered = undefined;
-          void commands.sidebarPeek(false, false);
+          void commands.sidebarPeek(false, false, false);
         }, duration("page"));
       },
       Math.max(LINGER_MS, settling),
@@ -263,7 +267,7 @@
     clearTimeout(linger);
     clearTimeout(lowered);
     untrack(() => {
-      if (peeking) void commands.sidebarPeek(false, false);
+      if (peeking) void commands.sidebarPeek(false, false, false);
       peeking = false;
     });
   });
@@ -404,7 +408,8 @@
   bind:this={aside}
   data-hidden={away || undefined}
   data-peek={(away && peeking) || undefined}
-  data-armed={(away && armed && !CUT_TO_CARD) || undefined}
+  data-armed={(away && armed) || undefined}
+  data-cut={CUT_TO_CARD || undefined}
   data-leaving={leaving ? true : undefined}
   style:left={leaving ? `${leaving.left}px` : undefined}
   style:top={leaving ? `${leaving.top}px` : undefined}
@@ -512,6 +517,12 @@
 
   .browser-sidebar[data-hidden][data-armed] {
     transition: translate var(--motion-page) var(--ease-emphasized);
+  }
+
+  /* Cut to, the card wears the corners Windows gives its pages, so its own
+     lie over theirs exactly. */
+  .browser-sidebar[data-hidden][data-cut] {
+    border-radius: var(--content-radius-windows);
   }
 
   .browser-sidebar[data-hidden][data-peek] {

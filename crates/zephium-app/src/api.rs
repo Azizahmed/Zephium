@@ -481,8 +481,12 @@ pub enum Command {
     SetSidebarWidth(f64, bool),
     /// The sidebar is put away, the page taking the window, or brought back.
     SetSidebarHidden(bool),
-    /// A hidden sidebar comes over the page, or goes back beneath it.
-    PeekSidebar(bool),
+    /// A hidden sidebar comes over the page, or goes back beneath it, sliding
+    /// as the card does or at once.
+    PeekSidebar {
+        peek: bool,
+        slide: bool,
+    },
     /// Transient Windows resize feedback only; no width or layout mutation.
     SidebarResizeGuide(Option<f64>),
     /// Whether the expanded sidebar is on screen to show a page-permission

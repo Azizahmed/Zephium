@@ -966,17 +966,17 @@ impl Shell {
                 let id = win.id;
                 if !hidden {
                     let card = layout::hidden_card(win.size, win.metrics);
-                    let _ = self.engine.raise_chrome(id, false, card);
+                    let _ = self.engine.raise_chrome(id, false, card, false);
                 }
                 let _ = self.engine.hint_stage_motion(id, StageMotion::Slide);
                 let _ = self.relayout_with(true);
             }
-            Command::PeekSidebar(peek) => {
+            Command::PeekSidebar { peek, slide } => {
                 if let Some(win) = self.windows.focused() {
                     // Only a hidden sidebar is beneath the page to come over it.
                     if !peek || win.metrics.sidebar_hidden {
                         let card = layout::hidden_card(win.size, win.metrics);
-                        let _ = self.engine.raise_chrome(win.id, peek, card);
+                        let _ = self.engine.raise_chrome(win.id, peek, card, slide);
                     }
                 }
             }

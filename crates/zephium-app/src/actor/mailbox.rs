@@ -1285,7 +1285,7 @@ fn command_coalesced_key(command: &Command) -> Option<CoalescedKey> {
         Command::SetMemoryPressure(_) => Some(CoalescedKey::MemoryPressure),
         Command::SetSidebarWidth(..) => Some(CoalescedKey::SidebarWidth),
         Command::SetSidebarHidden(_) => Some(CoalescedKey::SidebarHidden),
-        Command::PeekSidebar(_) => Some(CoalescedKey::SidebarPeek),
+        Command::PeekSidebar { .. } => Some(CoalescedKey::SidebarPeek),
         Command::SidebarResizeGuide(Some(_)) => Some(CoalescedKey::SidebarGuide),
         Command::SidebarResizeGuide(None) => Some(CoalescedKey::SidebarGuideEnd),
         Command::WorkPaneSetRect { .. } => Some(CoalescedKey::WorkPaneRect),

@@ -808,7 +808,15 @@ pub trait Engine {
     /// back beneath it. Only the stacking changes; nothing is laid out.
     /// `card` is where the column stands over the page, in window
     /// coordinates, for a platform whose chrome must be cut to it.
-    fn raise_chrome(&self, _window: WindowId, _raised: bool, _card: Rect) -> NativeDispatch {
+    /// `slide` follows the card as it slides in or out, rather than cutting
+    /// to it at once.
+    fn raise_chrome(
+        &self,
+        _window: WindowId,
+        _raised: bool,
+        _card: Rect,
+        _slide: bool,
+    ) -> NativeDispatch {
         NativeDispatch::Unsupported
     }
     /// Asks the next content layout applied to `window` to move rather than

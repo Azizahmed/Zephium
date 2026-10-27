@@ -1217,7 +1217,10 @@ fn a_hidden_sidebar_gives_the_page_the_window_and_comes_over_it_on_request() {
     };
 
     // A sidebar that is shown has nothing beneath the page to bring up.
-    shell.handle(Command::PeekSidebar(true));
+    shell.handle(Command::PeekSidebar {
+        peek: true,
+        slide: false,
+    });
     assert!(raises(&engine).is_empty());
 
     shell.handle(Command::SetSidebarHidden(true));
@@ -1230,10 +1233,19 @@ fn a_hidden_sidebar_gives_the_page_the_window_and_comes_over_it_on_request() {
         .flatten();
     assert_eq!(region.map(|region| region.x), Some(8.0));
 
-    shell.handle(Command::PeekSidebar(true));
-    shell.handle(Command::PeekSidebar(false));
+    shell.handle(Command::PeekSidebar {
+        peek: true,
+        slide: false,
+    });
+    shell.handle(Command::PeekSidebar {
+        peek: false,
+        slide: false,
+    });
     // Showing the sidebar again always puts its chrome back beneath.
-    shell.handle(Command::PeekSidebar(true));
+    shell.handle(Command::PeekSidebar {
+        peek: true,
+        slide: false,
+    });
     shell.handle(Command::SetSidebarHidden(false));
     assert_eq!(
         raises(&engine),

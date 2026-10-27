@@ -1,9 +1,9 @@
 //! A hidden sidebar's card over the page. The chrome and each page are
 //! sibling child windows, and siblings do not blend: raising the chrome
-//! would paint its whole window over the page. It is cut to the card's
-//! rounded rectangle instead, and the card's shadow is drawn on the pages
-//! beneath, by composition above their WebView2, so it falls on the page
-//! right up to the card's edge.
+//! would paint its whole window over the page. Over the pages it is cut to
+//! the card's rounded rectangle instead, following the card as it slides,
+//! and the card's shadow is drawn on the pages beneath, by composition above
+//! their WebView2, so it falls on the page right up to the card's edge.
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
@@ -12,11 +12,14 @@ use std::time::Duration;
 
 use windows::core::HSTRING;
 use windows::Foundation::TimeSpan;
-use windows::Win32::Foundation::HWND;
-use windows::Win32::Graphics::Gdi::{CreateRoundRectRgn, DeleteObject, SetWindowRgn};
+use windows::Win32::Foundation::{HWND, POINT, RECT};
+use windows::Win32::Graphics::Gdi::{
+    CombineRgn, CreateRectRgn, CreateRoundRectRgn, DeleteObject, GetWindowRgn, MapWindowPoints,
+    OffsetRgn, SetRectRgn, SetWindowRgn, RGN_DIFF, RGN_ERROR, RGN_OR,
+};
 use windows::Win32::UI::WindowsAndMessaging::{
-    GetClassNameW, GetWindow, IsWindow, SetWindowPos, GW_CHILD, GW_HWNDNEXT, HWND_BOTTOM, HWND_TOP,
-    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
+    GetClassNameW, GetWindow, GetWindowRect, IsWindow, IsWindowVisible, SetWindowPos, GW_CHILD,
+    GW_HWNDNEXT, HWND_BOTTOM, HWND_TOP, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
 };
 use windows::UI::Color;
 use windows::UI::Composition::{ContainerVisual, DropShadow, SpriteVisual};
@@ -76,27 +79,78 @@ pub(super) fn is_on_top(parent: HWND, chrome: HWND) -> bool {
     unsafe { GetWindow(parent, GW_CHILD) }.ok() == Some(chrome)
 }
 
-/// Cuts `chrome` to `card`, rounded by `diameter`.
-pub(super) fn clip_chrome(chrome: HWND, card: PixelRect, diameter: i32) -> bool {
+/// Cuts `chrome` to `card`, rounded by `diameter`, and to whatever of
+/// `parent`'s `client` area its other windows leave bare: the chrome round
+/// the pages stays in view, and the card comes over the page alone.
+pub(super) fn clip_chrome(
+    parent: HWND,
+    chrome: HWND,
+    client: (i32, i32),
+    card: PixelRect,
+    diameter: i32,
+) -> bool {
     let (x, y, width, height) = card;
-    // SAFETY: creates a region this call hands to the window or deletes.
-    let region = unsafe {
-        CreateRoundRectRgn(
+    // SAFETY: every region made here is handed to the window or deleted, and
+    // the windows read are `parent`'s live children.
+    unsafe {
+        let region = CreateRectRgn(0, 0, client.0, client.1);
+        if region.0.is_null() {
+            return false;
+        }
+        let piece = CreateRectRgn(0, 0, 0, 0);
+        let mut child = GetWindow(parent, GW_CHILD).ok();
+        while let Some(window) = child {
+            if window != chrome && IsWindowVisible(window).as_bool() && !piece.0.is_null() {
+                let mut bounds = RECT::default();
+                if GetWindowRect(window, &mut bounds).is_ok() {
+                    let mut corners = [
+                        POINT {
+                            x: bounds.left,
+                            y: bounds.top,
+                        },
+                        POINT {
+                            x: bounds.right,
+                            y: bounds.bottom,
+                        },
+                    ];
+                    let _ = MapWindowPoints(None, Some(parent), &mut corners);
+                    // A page is rounded by its own region, so the chrome shows
+                    // in its corners as it does beneath it.
+                    if GetWindowRgn(window, piece) == RGN_ERROR {
+                        let _ = SetRectRgn(
+                            piece,
+                            0,
+                            0,
+                            corners[1].x - corners[0].x,
+                            corners[1].y - corners[0].y,
+                        );
+                    }
+                    let _ = OffsetRgn(piece, corners[0].x, corners[0].y);
+                    let _ = CombineRgn(Some(region), Some(region), Some(piece), RGN_DIFF);
+                }
+            }
+            child = GetWindow(window, GW_HWNDNEXT).ok();
+        }
+        if !piece.0.is_null() {
+            let _ = DeleteObject(piece.into());
+        }
+        let rounded = CreateRoundRectRgn(
             x,
             y,
             x.saturating_add(width).saturating_add(1),
             y.saturating_add(height).saturating_add(1),
             diameter,
             diameter,
-        )
-    };
-    if region.0.is_null() {
-        return false;
-    }
-    // SAFETY: the system owns the region only when SetWindowRgn succeeds.
-    if unsafe { SetWindowRgn(chrome, Some(region), true) } == 0 {
-        let _ = unsafe { DeleteObject(region.into()) };
-        return false;
+        );
+        if !rounded.0.is_null() {
+            let _ = CombineRgn(Some(region), Some(region), Some(rounded), RGN_OR);
+            let _ = DeleteObject(rounded.into());
+        }
+        // The system owns the region only when SetWindowRgn succeeds.
+        if SetWindowRgn(chrome, Some(region), true) == 0 {
+            let _ = DeleteObject(region.into());
+            return false;
+        }
     }
     true
 }

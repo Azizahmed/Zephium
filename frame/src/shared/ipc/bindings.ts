@@ -526,9 +526,10 @@ export const commands = {
 	/**
 	 *  Brings a hidden sidebar over the page while the pointer wants it, or puts
 	 *  it back beneath. The window controls show with the card, and leave the
-	 *  moment it starts to go rather than once it has.
+	 *  moment it starts to go rather than once it has. `slide` has a platform that
+	 *  cuts the chrome to the card follow it in and out.
 	 */
-	sidebarPeek: (peek: boolean, lights: boolean) => __TAURI_INVOKE<void>("sidebar_peek", { peek, lights }),
+	sidebarPeek: (peek: boolean, lights: boolean, slide: boolean) => __TAURI_INVOKE<void>("sidebar_peek", { peek, lights, slide }),
 	sidebarResize: (width: number | null, enabled: boolean, revision: number | null) => __TAURI_INVOKE<boolean>("sidebar_resize", { width, enabled, revision }),
 	sidebarResizeGuide: (width: number | null) => __TAURI_INVOKE<boolean>("sidebar_resize_guide", { width }),
 	tabDragOver: (x: number | null, y: number | null) => __TAURI_INVOKE<void>("tab_drag_over", { x, y }),
