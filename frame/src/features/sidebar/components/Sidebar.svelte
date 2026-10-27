@@ -23,7 +23,7 @@
   import { uiCommands as ui } from "$domain/ui-commands";
   import SidebarHeader from "./SidebarHeader.svelte";
   import * as shapeMorph from "../lib/shape-morph";
-  import { duration, easing, reducedMotion } from "$shared/lib/motion";
+  import { duration, reducedMotion } from "$shared/lib/motion";
   import SidebarResizeHandle from "./SidebarResizeHandle.svelte";
 
   let {
@@ -84,6 +84,7 @@
     browserPage.currentPage() === null && !!tabs.activeTab()?.url && !tabs.activeTab()?.loading,
   );
   let away = $state(isHidden());
+  let handing = $state<"solid" | "fading" | null>(null);
   /** How long past the slide's own length native's page may still be on its
    *  way: it sets off once the layout has crossed to native and back. */
   const ARRIVAL_MARGIN_MS = 120;
@@ -101,27 +102,28 @@
   });
   $effect(() => {
     if (!hidden && untrack(() => away && peeking && overPage && !reducedMotion())) {
-      // Shown from the card, the card stays over the page while the page
-      // slides out from under it, and becomes the column once it has: gone
-      // beneath at once, it would leave the page bare where the column comes.
-      const handover = setTimeout(
+      // Shown from the card, the column takes its place at once, its window
+      // controls with it, still wearing the card's frost and still over the
+      // page while the page slides out from under it; then the frost fades
+      // into the column's own material and the chrome goes back beneath.
+      // Gone beneath at once, it would leave the page bare where it stood.
+      handing = "solid";
+      away = false;
+      let faded: ReturnType<typeof setTimeout> | undefined;
+      const arrived = setTimeout(
         () => {
-          const before = columns?.getBoundingClientRect().left;
-          away = false;
-          if (columns && before !== undefined)
-            void tick().then(() => {
-              if (!columns) return;
-              const shift = before - columns.getBoundingClientRect().left;
-              if (Math.abs(shift) >= 0.5)
-                columns.animate([{ translate: `${shift}px 0` }, { translate: "0 0" }], {
-                  duration: duration("base"),
-                  easing: easing("emphasized"),
-                });
-            });
+          handing = "fading";
+          void commands.sidebarPeek(false, false, false);
+          faded = setTimeout(() => (handing = null), duration("base"));
         },
         duration("page") + ARRIVAL_MARGIN_MS,
       );
-      return () => clearTimeout(handover);
+      return () => {
+        clearTimeout(arrived);
+        clearTimeout(faded);
+        if (untrack(() => handing) === "solid") void commands.sidebarPeek(false, false, false);
+        handing = null;
+      };
     }
     if (!hidden) {
       const main = untrack(() => away && !overPage && !reducedMotion()) ? beside() : null;
@@ -254,8 +256,6 @@
     return typing || !!aside.querySelector('[data-open="true"]');
   };
   function release() {
-    // Shown from the card, it is becoming the column, not leaving.
-    if (!hidden) return;
     clearTimeout(linger);
     const settling = Math.max(0, opened + SETTLE_MS - performance.now());
     linger = setTimeout(
@@ -298,7 +298,8 @@
     clearTimeout(linger);
     clearTimeout(lowered);
     untrack(() => {
-      if (peeking) void commands.sidebarPeek(false, false, false);
+      // A column handed over from the card goes beneath once the page is out.
+      if (peeking && handing === null) void commands.sidebarPeek(false, false, false);
       peeking = false;
     });
   });
@@ -445,7 +446,8 @@
   style:left={leaving ? `${leaving.left}px` : undefined}
   style:top={leaving ? `${leaving.top}px` : undefined}
   style:height={leaving ? `${leaving.height}px` : undefined}
-  style:--sidebar-frost={away ? `url("${FROSTS[scene()]}")` : undefined}
+  style:--sidebar-frost={away || handing ? `url("${FROSTS[scene()]}")` : undefined}
+  data-handing={handing ?? undefined}
   data-tauri-drag-region="deep"
   aria-label={m.ui_browser_sidebar()}
   style:width={`${width}px`}
@@ -558,6 +560,27 @@
 
   .browser-sidebar[data-hidden][data-peek] {
     translate: 0 0;
+  }
+
+  /* Handed over from the card, the column keeps the card's frost until the
+     page has slid out from under it, then lets it go. */
+  .browser-sidebar[data-handing] {
+    isolation: isolate;
+  }
+
+  .browser-sidebar[data-handing]::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    border-radius: var(--content-radius);
+    background: var(--sidebar-frost) center / cover;
+    pointer-events: none;
+    transition: opacity var(--motion-base) var(--ease-out);
+  }
+
+  .browser-sidebar[data-handing="fading"]::before {
+    opacity: 0;
   }
 
   /* Out over the page, the card draws its own edge: a hairline inside its
