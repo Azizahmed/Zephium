@@ -123,7 +123,7 @@ async fn update(
         // keep that filesystem and signature work off the async executor too.
         let needs_review = baseline_holders
             .iter()
-            .any(|(_, old)| requires_review(&root, old, &staged.pending.entry));
+            .any(|(profile, old)| requires_review(&root, *profile, old, &staged.pending.entry));
         Ok::<_, String>((staged, needs_review))
     })
     .await
@@ -181,8 +181,8 @@ async fn update(
     Ok(())
 }
 
-fn requires_review(root: &Path, old: &Entry, fresh: &Entry) -> bool {
-    let Some(baseline) = permission_baseline(root, old) else {
+fn requires_review(root: &Path, profile: ProfileId, old: &Entry, fresh: &Entry) -> bool {
+    let Some(baseline) = permission_baseline(root, profile, old) else {
         return true;
     };
     fresh
@@ -192,7 +192,7 @@ fn requires_review(root: &Path, old: &Entry, fresh: &Entry) -> bool {
         || fresh.hosts.iter().any(|host| !old.hosts.contains(host))
 }
 
-fn permission_baseline(root: &Path, old: &Entry) -> Option<Vec<String>> {
+fn permission_baseline(root: &Path, profile: ProfileId, old: &Entry) -> Option<Vec<String>> {
     if !old.reviewed_permissions.is_empty() {
         let native = zephium_webext::permissions::external_native_messaging_allowed(
             &old.reviewed_permissions,
@@ -246,6 +246,7 @@ fn permission_baseline(root: &Path, old: &Entry) -> Option<Vec<String>> {
     let verified = crx::verify(&bytes, Some(&id)).ok()?;
     let staged = root
         .join("staging")
+        .join(profile.to_string())
         .join(ExtensionInstallId::generate().to_string());
     let baseline = (|| {
         archive::extract(verified.zip, &staged, &archive::Limits::default()).ok()?;
@@ -300,7 +301,7 @@ mod tests {
         std::fs::write(&original, signed).unwrap();
 
         assert!(
-            !requires_review(root.path(), &old, &fresh),
+            !requires_review(root.path(), ProfileId::from(1), &old, &fresh),
             "the signed original and stored grant prove ordinary storage access"
         );
         assert!(old.reviewed_permissions.is_empty() && !old.publisher_verified);
@@ -309,44 +310,64 @@ mod tests {
             .reviewed_permissions
             .push("nativeMessaging".into());
         assert!(
-            requires_review(root.path(), &old, &increased),
+            requires_review(root.path(), ProfileId::from(1), &old, &increased),
             "injected native transport is never an original native-app grant"
         );
         increased.reviewed_permissions = vec!["storage".into(), "activeTab".into()];
         assert!(
-            requires_review(root.path(), &old, &increased),
+            requires_review(root.path(), ProfileId::from(1), &old, &increased),
             "the old compatibility layer also injected activeTab"
         );
         increased = fresh.clone();
         increased.hosts.push("https://new.example/*".into());
-        assert!(requires_review(root.path(), &old, &increased));
+        assert!(requires_review(
+            root.path(),
+            ProfileId::from(1),
+            &old,
+            &increased
+        ));
         old.permissions.retain(|name| name != "storage");
         assert!(
-            requires_review(root.path(), &old, &fresh),
+            requires_review(root.path(), ProfileId::from(1), &old, &fresh),
             "an original declaration alone does not prove a stored grant"
         );
         old.permissions.push("storage".into());
 
         std::fs::remove_file(&original).unwrap();
-        assert!(requires_review(root.path(), &old, &fresh));
+        assert!(requires_review(
+            root.path(),
+            ProfileId::from(1),
+            &old,
+            &fresh
+        ));
         let mut corrupted = signed.to_vec();
         *corrupted.last_mut().unwrap() ^= 1;
         std::fs::write(&original, corrupted).unwrap();
-        assert!(requires_review(root.path(), &old, &fresh));
+        assert!(requires_review(
+            root.path(),
+            ProfileId::from(1),
+            &old,
+            &fresh
+        ));
         std::fs::write(&original, signed).unwrap();
         old.version = "9.9.9".into();
         std::fs::write(packages.join("9.9.9.crx"), signed).unwrap();
         assert!(
-            requires_review(root.path(), &old, &fresh),
+            requires_review(root.path(), ProfileId::from(1), &old, &fresh),
             "the signed original must match the installed version"
         );
         old.version = fresh.version.clone();
         old.source = fresh.source.clone();
-        assert!(!requires_review(root.path(), &old, &fresh));
+        assert!(!requires_review(
+            root.path(),
+            ProfileId::from(1),
+            &old,
+            &fresh
+        ));
         old.source = format!("crx-{}", "0".repeat(64));
         std::fs::write(packages.join(format!("{}.crx", old.source)), signed).unwrap();
         assert!(
-            requires_review(root.path(), &old, &fresh),
+            requires_review(root.path(), ProfileId::from(1), &old, &fresh),
             "an existing source identity must match the actual bytes"
         );
     }
@@ -367,9 +388,19 @@ mod tests {
         old.reviewed_permissions.push("nativeMessaging".into());
         let fresh = old.clone();
         old.publisher_verified = false;
-        assert!(requires_review(root.path(), &old, &fresh));
+        assert!(requires_review(
+            root.path(),
+            ProfileId::from(1),
+            &old,
+            &fresh
+        ));
         old.publisher_verified = true;
-        assert!(!requires_review(root.path(), &old, &fresh));
+        assert!(!requires_review(
+            root.path(),
+            ProfileId::from(1),
+            &old,
+            &fresh
+        ));
         discard(&staged.pending);
     }
 }

@@ -2032,3 +2032,8 @@ mechanisms, not a sandbox. The retained runner uses a fixed environment and no U
 login shell. Native Windows runtime qualification remains outstanding. This policy
 cannot identify secrets stored in arbitrary ordinary file contents and is not a
 claim of complete secret detection or same-user process isolation.
+
+Profile deletion removes the exact extension registry, its temporary file and
+profile-owned staging through the existing deletion journal. Cleanup failures
+retain that journal entry for retry. Package preparation does not hold a profile
+lifetime lease. Shared package collection remains with the extension cache prune.

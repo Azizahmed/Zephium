@@ -214,7 +214,7 @@ pub(super) fn stage(
     profile: ProfileId,
     installed: &[Entry],
 ) -> Result<Staged, String> {
-    let staging = root.join("staging");
+    let staging = root.join("staging").join(profile.to_string());
     std::fs::create_dir_all(&staging).map_err(|e| e.to_string())?;
     let review_id = ExtensionInstallId::generate().to_string();
     let dir = staging.join(&review_id);
@@ -724,7 +724,9 @@ mod tests {
             &archive::Limits::default(),
         )
         .unwrap();
-        assert!(extensions.rebuild(&mut legacy, &trusted.compat).is_err());
+        assert!(extensions
+            .rebuild(ProfileId::from(1), &mut legacy, &trusted.compat)
+            .is_err());
     }
     #[tokio::test]
     async fn cancelling_a_folder_review_erases_both_prepared_and_frozen_trees() {
@@ -803,7 +805,7 @@ mod tests {
             ];
             std::fs::write(packages.join(format!("{}.crx", entry.version)), bytes).unwrap();
             let revision = entry.compat.clone();
-            extensions.rebuild(&mut entry, &revision).unwrap();
+            extensions.rebuild(profile, &mut entry, &revision).unwrap();
             assert!(entry.publisher_verified);
             assert_eq!(
                 entry
@@ -827,7 +829,7 @@ mod tests {
                 .retain(|permission| permission != "nativeMessaging");
             entry.reviewed_permissions.clear();
             entry.publisher_verified = false;
-            extensions.rebuild(&mut entry, &revision).unwrap();
+            extensions.rebuild(profile, &mut entry, &revision).unwrap();
             assert!(!entry
                 .reviewed_permissions
                 .contains(&"nativeMessaging".into()));

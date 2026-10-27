@@ -162,7 +162,7 @@ impl WebExtensions {
                 || entry.source.is_empty()
                 || entry.prepared_digest.is_empty()
             {
-                match self.rebuild(entry, &revision) {
+                match self.rebuild(profile, entry, &revision) {
                     Ok(()) => changed = true,
                     Err(error) => {
                         eprintln!("extensions: could not rebuild {}: {error}", entry.id);
@@ -191,7 +191,7 @@ impl WebExtensions {
         loads
     }
 
-    fn rebuild(&self, entry: &mut Entry, revision: &str) -> Result<(), String> {
+    fn rebuild(&self, profile: ProfileId, entry: &mut Entry, revision: &str) -> Result<(), String> {
         use zephium_webext::package::{publish_directory, tree_digest};
         let packages = self.packages(&entry.id);
         let key = if entry.source.is_empty() {
@@ -219,6 +219,7 @@ impl WebExtensions {
         let staged = self
             .root
             .join("staging")
+            .join(profile.to_string())
             .join(ExtensionInstallId::generate().to_string());
         std::fs::create_dir_all(staged.parent().ok_or("invalid staging path")?)
             .map_err(|e| e.to_string())?;
