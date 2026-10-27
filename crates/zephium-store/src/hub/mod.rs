@@ -117,6 +117,7 @@ pub struct Hub {
     committed_session: Option<String>,
     /// Exact source bytes awaiting a backup before canonical state replaces them.
     pending_session_backup: Option<Vec<u8>>,
+    session_backup_checkpoint_pending: bool,
     session_backup_expiry: Option<session::SessionBackupExpiry>,
     recovery_required: Option<String>,
     /// One unpredictable token shared by every Hub constructed in this
@@ -211,6 +212,7 @@ impl Hub {
             legacy_state_purged: false,
             committed_session: None,
             pending_session_backup: None,
+            session_backup_checkpoint_pending: false,
             session_backup_expiry: None,
             recovery_required,
             deletion_process_generation,
@@ -332,6 +334,7 @@ impl Hub {
             legacy_state_purged: false,
             committed_session: None,
             pending_session_backup: None,
+            session_backup_checkpoint_pending: false,
             session_backup_expiry: None,
             recovery_required: None,
             deletion_process_generation: deletion_process_generation(),

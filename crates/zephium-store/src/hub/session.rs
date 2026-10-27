@@ -267,7 +267,7 @@ fn snapshot_names_profile(state: &SessionState, profile: ProfileId) -> bool {
 pub(super) fn discard_profile_backup(
     meta: &Connection,
     profile: ProfileId,
-) -> rusqlite::Result<()> {
+) -> rusqlite::Result<bool> {
     let backup = meta
         .query_row(
             "SELECT CASE WHEN typeof(schema_version) = 'integer' THEN schema_version ELSE -1 END,
@@ -279,10 +279,11 @@ pub(super) fn discard_profile_backup(
         .optional();
     let (version, data) = match backup {
         Ok(Some(backup)) => backup,
-        Ok(None) => return Ok(()),
+        Ok(None) => return Ok(false),
         Err(_) => {
-            meta.execute("DELETE FROM session_snapshot_backup WHERE id = 1", [])?;
-            return Ok(());
+            return meta
+                .execute("DELETE FROM session_snapshot_backup WHERE id = 1", [])
+                .map(|removed| removed > 0);
         }
     };
     let state = (version == SESSION_SCHEMA_VERSION)
@@ -292,14 +293,16 @@ pub(super) fn discard_profile_backup(
         .and_then(|data| decode_authoritative_snapshot(&data));
     if state
         .as_ref()
-        .is_none_or(|state| snapshot_names_profile(state, profile))
-        && meta.execute("DELETE FROM session_snapshot_backup WHERE id = 1", [])? != 1
+        .is_some_and(|state| !snapshot_names_profile(state, profile))
     {
+        return Ok(false);
+    }
+    if meta.execute("DELETE FROM session_snapshot_backup WHERE id = 1", [])? != 1 {
         return Err(invalid_data(
             "session backup disposal did not remove its row",
         ));
     }
-    Ok(())
+    Ok(true)
 }
 
 /// Runs after the disposal transaction commits. SQLite reports a busy
@@ -414,7 +417,7 @@ impl Hub {
             .transpose()
             .map_err(|_| invalid_data("session backup repair could not be encoded"))?;
         let tx = self.meta.transaction()?;
-        discard_profile_backup(&tx, profile)?;
+        let removed = discard_profile_backup(&tx, profile)?;
         if let (Some(source), Some(replacement)) = (&self.pending_session_backup, &replacement) {
             // A later load must not turn the just-erased raw source into a
             // pending backup again. Keep the current canonical session.
@@ -430,11 +433,16 @@ impl Hub {
             }
         }
         tx.commit()?;
+        self.session_backup_checkpoint_pending |= removed || replacement.is_some();
         if replacement.is_some() {
             self.pending_session_backup = None;
             self.committed_session = None;
         }
-        checkpoint_session_backup(&self.meta)
+        if self.session_backup_checkpoint_pending {
+            checkpoint_session_backup(&self.meta)?;
+            self.session_backup_checkpoint_pending = false;
+        }
+        Ok(())
     }
 }
 
@@ -1140,6 +1148,103 @@ mod qa_settings_recovery_tests {
                 .unwrap(),
             0
         );
+    }
+
+    #[test]
+    fn history_clear_checkpoints_only_disposed_session_bytes_and_retains_failed_cleanup() {
+        for unrelated_backup in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let mut hub = Hub::open(dir.path().to_path_buf()).unwrap();
+            let backup = saved_qa_session();
+            let profile = ProfileId::from(705);
+            let mut state = backup.clone();
+            state.profiles.push(PersistedProfile {
+                id: profile,
+                name: "Other".into(),
+                kind: ProfileKind::Named,
+            });
+            hub.save(&core_session::canonicalize(state)).unwrap();
+            if unrelated_backup {
+                hub.meta
+                    .execute(
+                        "INSERT INTO session_snapshot_backup VALUES (1, ?1, ?2, ?3)",
+                        params![
+                            now_secs(),
+                            SESSION_SCHEMA_VERSION,
+                            serde_json::to_vec(&backup).unwrap()
+                        ],
+                    )
+                    .unwrap();
+            }
+            let reader = Connection::open(dir.path().join("meta.sqlite")).unwrap();
+            reader
+                .execute_batch("BEGIN; SELECT * FROM session_snapshot")
+                .unwrap();
+            hub.meta
+                .execute_batch("CREATE TABLE checkpoint_fixture(value INTEGER)")
+                .unwrap();
+            assert_eq!(hub.clear_history_checked(profile, None), Some(0));
+            assert_eq!(
+                hub.meta
+                    .query_row("SELECT count(*) FROM session_snapshot_backup", [], |row| {
+                        row.get::<_, i64>(0)
+                    })
+                    .unwrap(),
+                i64::from(unrelated_backup)
+            );
+
+            let saved = serde_json::to_vec(&hub.load().unwrap().unwrap()).unwrap();
+            hub.meta
+                .execute(
+                    "INSERT OR REPLACE INTO session_snapshot_backup VALUES (1, ?1, ?2, ?3)",
+                    params![now_secs(), SESSION_SCHEMA_VERSION, saved],
+                )
+                .unwrap();
+            assert_eq!(hub.clear_history_checked(profile, None), None);
+            assert_eq!(
+                hub.meta
+                    .query_row("SELECT count(*) FROM session_snapshot_backup", [], |row| {
+                        row.get::<_, i64>(0)
+                    })
+                    .unwrap(),
+                0
+            );
+            assert_eq!(hub.clear_history_checked(profile, None), None);
+            reader.execute_batch("ROLLBACK").unwrap();
+            assert_eq!(hub.clear_history_checked(profile, None), Some(0));
+            reader
+                .execute_batch("BEGIN; SELECT * FROM session_snapshot")
+                .unwrap();
+            hub.meta
+                .execute_batch("INSERT INTO checkpoint_fixture VALUES (1)")
+                .unwrap();
+            assert_eq!(hub.clear_history_checked(profile, None), Some(0));
+            reader.execute_batch("ROLLBACK").unwrap();
+        }
+    }
+
+    #[test]
+    fn canonical_source_repair_retains_checkpoint_debt_without_a_backup_row() {
+        let (dir, mut state) = marked_directory(REASON);
+        state.active_item = Some(ItemId::from(999_999));
+        let source = serde_json::to_string_pretty(&state).unwrap();
+        let reader = Connection::open(dir.path().join("meta.sqlite")).unwrap();
+        reader
+            .execute("UPDATE session_snapshot SET data = ?1", [&source])
+            .unwrap();
+        reader
+            .execute("UPDATE session_recovery SET data = ?1", [source.as_bytes()])
+            .unwrap();
+        let mut hub = Hub::open(dir.path().to_path_buf()).unwrap();
+        assert!(hub.pending_session_backup.is_some());
+        reader
+            .execute_batch("BEGIN; SELECT * FROM session_snapshot")
+            .unwrap();
+        assert!(hub.discard_session_backup(state.profiles[0].id).is_err());
+        assert!(hub.pending_session_backup.is_none());
+        assert!(hub.discard_session_backup(state.profiles[0].id).is_err());
+        reader.execute_batch("ROLLBACK").unwrap();
+        hub.discard_session_backup(state.profiles[0].id).unwrap();
     }
 
     #[test]
