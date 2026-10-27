@@ -9,6 +9,11 @@ on:
         description: Existing tag to rebuild, for example v1.0.0-beta.1
         required: true
         type: string
+      emergency:
+        description: Emergency release only — skip component tests and disclose this in release notes
+        required: false
+        default: false
+        type: boolean
 
 permissions: {}
 
@@ -149,11 +154,10 @@ jobs:
           echo "::error::No successful main CI run exists for release commit ${candidate}."
           exit 1
 
-  # The component suite runs only on demand elsewhere, so every release runs
-  # it and shows its result. It does not hold the builds or the draft yet:
-  # some of its tests have never passed on GitHub's macOS runner while they
-  # pass locally on the same WebKit build. Gate again once they do.
+  # Components gate drafts unless an explicit emergency dispatch skips them.
+  # Builds run concurrently; a failed component shard always blocks publication.
   components:
+    if: ${{ !inputs.emergency }}
     needs: gate
     permissions:
       contents: read
@@ -438,7 +442,8 @@ jobs:
 
   publish:
     name: Draft release
-    needs: [gate, ci, macos, windows]
+    needs: [gate, ci, components, macos, windows]
+    if: ${{ !cancelled() && needs.gate.result == 'success' && needs.ci.result == 'success' && needs.macos.result == 'success' && needs.windows.result == 'success' && (needs.components.result == 'success' || (inputs.emergency && needs.components.result == 'skipped')) }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
@@ -449,6 +454,7 @@ jobs:
       VERSION: ${{ needs.gate.outputs.version }}
       UPDATER_PUBKEY: ${{ needs.gate.outputs.pubkey }}
       SIGNPATH_ENABLED: ${{ needs.gate.outputs.signpath }}
+      EMERGENCY_SKIP_COMPONENTS: ${{ inputs.emergency }}
     steps:
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
@@ -534,6 +540,10 @@ jobs:
 
           Verify a download with \`SHA256SUMS\` or \`gh attestation verify <file> --repo ${GITHUB_REPOSITORY}\`.
           EOF
+          if [[ "${EMERGENCY_SKIP_COMPONENTS}" == true ]]; then
+            printf '\n**EMERGENCY: Component tests were skipped for this release.**\n' >> "${RUNNER_TEMP}/notes.md"
+            echo "::warning::Emergency release: component tests were skipped; release notes disclose the bypass."
+          fi
           # releases/latest skips prereleases, and the website and updater read it.
           # Betas stay on it until the first stable release; after that they must
           # never reach stable users.

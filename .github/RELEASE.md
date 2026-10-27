@@ -109,6 +109,24 @@ its workflow `head_sha` and provenance describe the candidate's tag commit.
 An existing draft for that tag is replaced; a published release is never
 touched.
 
+## Draft review and stable publication
+
+Draft creation requires main CI for the exact release commit, both build/sign
+jobs, the release security gate and every WebKit component shard. Components use
+one retry (`--retry=1`) to tolerate an isolated runner failure.
+
+For an urgent release, dispatch **Release** from the candidate tag with the same
+`tag` input and set the boolean **`emergency`** input to `true`. This skips only
+components; main CI, security, build and signing checks still gate the draft.
+The generated release notes visibly state **EMERGENCY: Component tests were
+skipped for this release.** Review that disclosure before publishing.
+
+Install the draft's final DMG and Windows installer and review native behavior,
+platform signing, updater signatures and provenance on the shipping platforms.
+Hosted checks provide source/API coverage; retain useful device results with the
+candidate commit and artifact hashes so a rebuild cannot be mistaken for the
+bytes reviewed.
+
 ## Published assets
 
 The website links `releases/latest/download/<name>`, so these names are a

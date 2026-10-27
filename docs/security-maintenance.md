@@ -200,3 +200,10 @@ For every candidate, retain:
 
 Any source, lockfile, floor, exception, build image, signing input, or workflow
 change invalidates the prior evidence and requires a new candidate run.
+
+Stable draft publication follows
+[the release procedure](../.github/RELEASE.md#draft-review-and-stable-publication).
+Component failures block a draft unless the release is explicitly dispatched
+with `emergency=true`; that bypass is visible in its release notes. Hosted green
+checks do not supply native device evidence. Review the final downloaded assets
+before publication and retain useful device results against their hashes.

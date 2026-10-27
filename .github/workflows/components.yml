@@ -40,4 +40,4 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm --dir frame run i18n
       - run: pnpm --dir frame exec playwright install webkit
-      - run: pnpm --dir frame run test:component --retry=2 --shard=${{ matrix.shard }}/4
+      - run: pnpm --dir frame run test:component --retry=1 --shard=${{ matrix.shard }}/4
