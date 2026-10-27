@@ -97,6 +97,11 @@
       void extensions.invoke(profile, tab, action, menuAnchor);
     });
   });
+  // Windows' own caption waits out of sight over the page; the toolbar is
+  // where a hand goes for the window, so hovering it brings the caption out.
+  function holdCaption(held: boolean) {
+    if (IS_WINDOWS) void commands.windowCaptionHold(held).catch(() => {});
+  }
 </script>
 
 <!--
@@ -112,7 +117,14 @@
     act on the column. At 56px two 26px buttons are exactly what fits on one
     line, and the rule below them says where the head ends.
   -->
-  <header class="flex shrink-0 flex-col items-center gap-[3px]" aria-label={m.ui_navigation()}>
+  <!-- The hover only brings the caption out; nothing here acts on it. -->
+  <!-- svelte-ignore a11y_no_static_element_interactions -->
+  <header
+    class="flex shrink-0 flex-col items-center gap-[3px]"
+    aria-label={m.ui_navigation()}
+    onpointerenter={() => holdCaption(true)}
+    onpointerleave={() => holdCaption(false)}
+  >
     {#if lights}
       <div style:height="var(--titlebar-height)" aria-hidden="true"></div>
     {:else if IS_MAC}
@@ -134,8 +146,12 @@
     <span class="mt-[6px] mb-[7px] h-px w-[22px] rounded-full bg-border" aria-hidden="true"></span>
   </header>
 {:else}
+  <!-- The hover only brings the caption out; nothing here acts on it. -->
+  <!-- svelte-ignore a11y_no_static_element_interactions -->
   <header
     class="flex shrink-0 items-center gap-px pe-1.5"
+    onpointerenter={() => holdCaption(true)}
+    onpointerleave={() => holdCaption(false)}
     style:height="var(--titlebar-height)"
     style:padding-inline-start={lights
       ? "var(--traffic-light-inset)"

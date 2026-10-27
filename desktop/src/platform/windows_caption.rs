@@ -22,6 +22,16 @@ const HIDE: usize = ID + 1;
 const FADE: usize = ID + 2;
 const CLOSE_SETTLED: usize = ID + 3;
 const REVEAL: usize = ID + 4;
+const WATCH: usize = ID + 5;
+// How often the pointer is read for the top of the window. A page's WebView2
+// belongs to another process, so no move over it reaches this thread.
+const WATCH_MS: u32 = 50;
+// With another window in front there is nothing to read, only a moment to
+// notice this one has come back.
+const WAITING_MS: u32 = 250;
+// How far down from the window's top the pointer asks for the caption: the
+// gutter and a little of the page, not a page's own top bar.
+const TOP_REACH: f64 = 20.0;
 // The pointer must rest on the reveal edge this long before the caption
 // slides in, so passing over it on the way elsewhere reveals nothing.
 const REVEAL_DWELL_MS: u32 = 150;
@@ -69,6 +79,11 @@ struct State {
     surface: Option<paint::Surface>,
     geometry: Option<(i32, i32, i32, i32, i32, u32)>,
     render_failed: bool,
+    // The sidebar's toolbar is hovered: the caption comes out and stays.
+    held: bool,
+    // The pointer was near the window's top at the last reading.
+    near_top: bool,
+    watch_ms: u32,
 }
 
 pub fn install(window: &WebviewWindow) -> bool {
@@ -173,6 +188,9 @@ pub fn install(window: &WebviewWindow) -> bool {
             surface: Some(surface),
             geometry: None,
             render_failed: false,
+            held: false,
+            near_top: false,
+            watch_ms: WATCH_MS,
         }));
         let mut installed =
             SetWindowSubclass(owner, Some(owner_proc), ID, pointer as usize).as_bool();
@@ -190,7 +208,28 @@ pub fn install(window: &WebviewWindow) -> bool {
             return false;
         }
         layout(pointer);
+        SetTimer(Some(strip), WATCH, WATCH_MS, None);
         true
+    }
+}
+/// Brings the caption out and keeps it while the sidebar's toolbar is
+/// hovered, or lets it go as it would any hover. Runs on the UI thread.
+pub fn set_held(window: &WebviewWindow, held: bool) {
+    // SAFETY: see `state_of`.
+    unsafe {
+        let Some(p) = state_of(window) else {
+            return;
+        };
+        if (*p).held == held {
+            return;
+        }
+        (*p).held = held;
+        if held {
+            cancel_reveal(p);
+            reveal(p);
+        } else {
+            SetTimer(Some((*p).strip), HIDE, 450, None);
+        }
     }
 }
 /// The live state of a window's caption, found through its subclass. Runs on
@@ -680,6 +719,28 @@ unsafe fn hover_reveal(p: *mut State, hot: HWND) {
         (*p).reveal_armed = true;
         SetTimer(Some((*p).strip), REVEAL, REVEAL_DWELL_MS, None);
     }
+}
+unsafe fn in_front(owner: HWND) -> bool {
+    GetAncestor(GetForegroundWindow(), GA_ROOTOWNER) == owner
+}
+/// Whether the pointer is over the window, in front, within reach of its top.
+unsafe fn near_top(p: *mut State) -> bool {
+    let owner = (*p).owner;
+    if !in_front(owner) {
+        return false;
+    }
+    let mut cursor = POINT::default();
+    if GetCursorPos(&mut cursor).is_err() || GetAncestor(WindowFromPoint(cursor), GA_ROOT) != owner
+    {
+        return false;
+    }
+    let mut at = cursor;
+    let mut client = RECT::default();
+    if !ScreenToClient(owner, &mut at).as_bool() || GetClientRect(owner, &mut client).is_err() {
+        return false;
+    }
+    let reach = (TOP_REACH * GetDpiForWindow(owner).max(96) as f64 / 96.0).round() as i32;
+    at.y >= 0 && at.y < reach && at.x >= 0 && at.x < client.right
 }
 /// Whether the pointer is where the controls stand when they are out.
 unsafe fn at_controls(p: *mut State) -> bool {
@@ -1266,8 +1327,30 @@ unsafe extern "system" fn strip_proc(
             let mut cursor = POINT::default();
             let _ = GetCursorPos(&mut cursor);
             let hovered = WindowFromPoint(cursor);
-            if (hovered == (*p).edge || (*p).buttons.contains(&hovered)) && pointer_moved_on(p) {
+            if (hovered == (*p).edge || (*p).buttons.contains(&hovered) || near_top(p))
+                && pointer_moved_on(p)
+            {
                 reveal(p);
+            }
+            return LRESULT(0);
+        }
+        WM_TIMER if w.0 == WATCH => {
+            let near = near_top(p);
+            if near && !(*p).expanded {
+                hover_reveal(p, HWND::default());
+            } else if !near && (*p).near_top {
+                cancel_reveal(p);
+                SetTimer(Some(hwnd), HIDE, 450, None);
+            }
+            (*p).near_top = near;
+            let interval = if in_front((*p).owner) {
+                WATCH_MS
+            } else {
+                WAITING_MS
+            };
+            if (*p).watch_ms != interval {
+                (*p).watch_ms = interval;
+                SetTimer(Some(hwnd), WATCH, interval, None);
             }
             return LRESULT(0);
         }
@@ -1298,6 +1381,8 @@ unsafe extern "system" fn strip_proc(
             // dismissal. No polling timer runs while a gesture owns the band.
             if (*p).sizing
                 || (*p).menu_open
+                || (*p).held
+                || near_top(p)
                 || !(*p).pressed_button.0.is_null()
                 || (*p).drag_start.is_some()
                 || (*p).buttons.contains(&GetFocus())

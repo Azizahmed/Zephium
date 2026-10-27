@@ -530,6 +530,11 @@ export const commands = {
 	 *  cuts the chrome to the card follow it in and out.
 	 */
 	sidebarPeek: (peek: boolean, lights: boolean, slide: boolean) => __TAURI_INVOKE<void>("sidebar_peek", { peek, lights, slide }),
+	/**
+	 *  Brings a window's own caption out and keeps it while the sidebar's
+	 *  toolbar is hovered, on a platform whose caption waits out of sight.
+	 */
+	windowCaptionHold: (held: boolean) => __TAURI_INVOKE<void>("window_caption_hold", { held }),
 	sidebarResize: (width: number | null, enabled: boolean, revision: number | null) => __TAURI_INVOKE<boolean>("sidebar_resize", { width, enabled, revision }),
 	sidebarResizeGuide: (width: number | null) => __TAURI_INVOKE<boolean>("sidebar_resize_guide", { width }),
 	tabDragOver: (x: number | null, y: number | null) => __TAURI_INVOKE<void>("tab_drag_over", { x, y }),
