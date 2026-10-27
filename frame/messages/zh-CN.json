@@ -1484,7 +1484,7 @@
   "onb_import_action": "导入",
   "onb_import_unavailable": "导入功能将在不久后的更新中推出。",
   "onb_import_quit": "请先退出 {browser}。它运行时会锁定其数据。",
-  "onb_import_permission": "请先在“系统设置”中为 {browser} 授予访问权限。",
+  "onb_import_permission": "Zephium 需要“完全磁盘访问权限”才能读取 {browser}。请在“系统设置”中打开，然后重新打开 Zephium。",
   "onb_import_reading": "正在读取 {count} 项",
   "onb_import_done": "已导入 {count} 项",
   "onb_import_none": "在此设备上未找到其他浏览器。",

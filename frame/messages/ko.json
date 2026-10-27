@@ -1484,7 +1484,7 @@
   "onb_import_action": "가져오기",
   "onb_import_unavailable": "가져오기 기능은 곧 업데이트로 제공돼요.",
   "onb_import_quit": "열려 있는 {browser}에서는 데이터가 잠겨 있어요. 먼저 종료해 주세요.",
-  "onb_import_permission": "{browser}에 시스템 설정에서 접근 권한을 먼저 허용해야 해요.",
+  "onb_import_permission": "{browser}의 데이터를 읽으려면 Zephium에 전체 디스크 접근 권한이 필요해요. 시스템 설정에서 켠 다음 Zephium을 다시 열어 주세요.",
   "onb_import_reading": "항목 {count}개 읽는 중",
   "onb_import_done": "항목 {count}개를 가져왔어요",
   "onb_import_none": "이 기기에서 다른 브라우저를 찾지 못했어요.",

@@ -1484,7 +1484,7 @@
   "onb_import_action": "Importieren",
   "onb_import_unavailable": "Das Importieren kommt bald mit einem Update.",
   "onb_import_quit": "Beende zuerst {browser}. Solange er läuft, sperrt er seine Daten.",
-  "onb_import_permission": "{browser} benötigt zuerst eine Freigabe in den Systemeinstellungen.",
+  "onb_import_permission": "Zephium braucht Festplattenvollzugriff, um {browser} zu lesen. Aktiviere ihn in den Systemeinstellungen und öffne Zephium danach neu.",
   "onb_import_reading": "{count} Elemente werden gelesen",
   "onb_import_done": "{count} Elemente übernommen",
   "onb_import_none": "Auf diesem Gerät wurden keine anderen Browser gefunden.",

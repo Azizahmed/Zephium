@@ -1484,7 +1484,7 @@
   "onb_import_action": "Import",
   "onb_import_unavailable": "Importing arrives in an update shortly.",
   "onb_import_quit": "Quit {browser} first. It keeps its data locked while open.",
-  "onb_import_permission": "{browser} needs access in System Settings first.",
+  "onb_import_permission": "Zephium needs Full Disk Access to read {browser}. Turn it on in System Settings, then reopen Zephium.",
   "onb_import_reading": "Reading {count} items",
   "onb_import_done": "{count} items brought over",
   "onb_import_none": "No other browsers found on this device.",

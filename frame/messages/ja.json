@@ -1484,7 +1484,7 @@
   "onb_import_action": "読み込む",
   "onb_import_unavailable": "読み込み機能は、まもなくアップデートで提供されます。",
   "onb_import_quit": "先に{browser}を終了してください。開いている間は、データがロックされたままです。",
-  "onb_import_permission": "{browser}には、先にシステム設定でアクセスを許可する必要があります。",
+  "onb_import_permission": "{browser}を読み取るには、Zephiumにフルディスクアクセスが必要です。システム設定でオンにしてから、Zephiumを開き直してください。",
   "onb_import_reading": "{count}件の項目を読み取っています",
   "onb_import_done": "{count}件の項目を読み込みました",
   "onb_import_none": "このデバイスで、他のブラウザは見つかりませんでした。",
