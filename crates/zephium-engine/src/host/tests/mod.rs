@@ -633,18 +633,17 @@ fn webview2_save_as_passes_only_while_the_browser_has_asked_for_one() {
         "/../../vendor/wry/src/webview2/mod.rs"
     ));
     let mut handlers = webview2.split("add_SaveAsUIShowing(").skip(1);
-    // Both registrations: every view, and the views a person reads.
-    for _ in 0..2 {
-        let handler = handlers
-            .next()
-            .expect("a SaveAsUIShowing registration")
-            .split("token,")
-            .next()
-            .expect("a bounded SaveAsUIShowing handler");
-        assert!(handler.contains("gate.as_ref().is_some_and(|gate| gate.get())"));
-        assert!(handler.contains("args.SetCancel(!allowed)?"));
-        assert!(!handler.contains("SetCancel(true)"));
-    }
+    // One gate handles all views; a second registration must not override it.
+    let handler = handlers
+        .next()
+        .expect("a SaveAsUIShowing registration")
+        .split("token,")
+        .next()
+        .expect("a bounded SaveAsUIShowing handler");
+    assert!(handler.contains("gate.as_ref().is_some_and(|gate| gate.get())"));
+    assert!(handler.contains("args.SetCancel(!allowed)?"));
+    assert!(!handler.contains("SetCancel(true)"));
+    assert!(handlers.next().is_none());
     // A view built without the gate (an agent view, a raw view) cannot open
     // one, and the gate is closed again when the dialog's call completes.
     let show = webview2

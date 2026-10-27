@@ -2290,6 +2290,7 @@ pub(crate) struct PlatformSpecificWebViewAttributes {
   native_context_menu_handler: Option<
     Rc<dyn Fn(&ICoreWebView2Controller, &ICoreWebView2ContextMenuRequestedEventArgs) -> bool>,
   >,
+  native_resource_save_handler: Option<Rc<dyn Fn(&ICoreWebView2Controller) -> bool>>,
   native_download_handler: Option<
     std::sync::Arc<dyn Fn(&ICoreWebView2Controller, &ICoreWebView2DownloadStartingEventArgs)>,
   >,
@@ -2313,6 +2314,7 @@ impl Default for PlatformSpecificWebViewAttributes {
       environment_created_handler: None,
       profile_name: None,
       native_context_menu_handler: None,
+      native_resource_save_handler: None,
       native_download_handler: None,
       permission_decisions_saved: false,
     }
@@ -2327,6 +2329,14 @@ pub trait WebViewBuilderExtWindows {
     self,
     handler: impl Fn(&ICoreWebView2Controller, &ICoreWebView2ContextMenuRequestedEventArgs) -> bool
       + 'static,
+  ) -> Self;
+  /// Authorizes a context-menu resource save before it enters DownloadStarting.
+  /// The host must validate the menu's document and resource kind. A true return
+  /// suppresses the runtime's picker; the native download handler must choose
+  /// the destination. Requires a native menu, native downloads and UseHandlers.
+  fn with_native_resource_save_handler(
+    self,
+    handler: impl Fn(&ICoreWebView2Controller) -> bool + 'static,
   ) -> Self;
   /// Hands the original native download event to the host. Cancellation is
   /// set before invocation; the host must retain a deferral to resolve later.
@@ -2484,6 +2494,13 @@ pub trait WebViewBuilderExtWindows {
 
 #[cfg(windows)]
 impl WebViewBuilderExtWindows for WebViewBuilder<'_> {
+  fn with_native_resource_save_handler(
+    mut self,
+    handler: impl Fn(&ICoreWebView2Controller) -> bool + 'static,
+  ) -> Self {
+    self.platform_specific.native_resource_save_handler = Some(Rc::new(handler));
+    self
+  }
   fn with_native_context_menu_handler(
     mut self,
     handler: impl Fn(&ICoreWebView2Controller, &ICoreWebView2ContextMenuRequestedEventArgs) -> bool
