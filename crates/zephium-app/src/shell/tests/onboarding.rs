@@ -5,10 +5,10 @@ fn onboarding(store: &FakeStore) -> Option<String> {
 }
 
 fn kept(shell: &Shell) -> Vec<(ItemId, String)> {
-    let profile = shell.windows.focused().unwrap().profile;
+    let space = shell.windows.focused().unwrap().space;
     shell
         .items
-        .roots(Placement::Favorites { profile })
+        .roots(Placement::Favorites { space })
         .iter()
         .map(|id| {
             let url = shell.items.tab(*id).unwrap().url.as_ref().unwrap();
@@ -125,6 +125,37 @@ fn a_catalog_site_is_kept_unloaded_with_its_mark_and_only_once() {
         assert_eq!(refused.outcome, OperationOutcome::Rejected);
     }
     assert_eq!(kept(&shell).len(), 1);
+}
+
+#[test]
+fn a_kept_site_belongs_to_the_space_it_was_kept_in() {
+    let (mut shell, _engine, _screen) = setup();
+    shell.handle(Command::Bootstrap);
+    let home = shell.windows.focused().unwrap().space;
+    shell.handle_operation(Command::KeepSite("slack".into()));
+    assert_eq!(kept(&shell).len(), 1);
+
+    shell.handle_operation(Command::Space(Box::new(crate::SpaceCommand::Create {
+        name: "Studio".into(),
+        look: Default::default(),
+    })));
+    assert_ne!(shell.windows.focused().unwrap().space, home);
+    assert!(kept(&shell).is_empty());
+
+    // The same site may be kept again here, and letting it go here leaves
+    // the other space's alone.
+    let here = shell.handle_operation(Command::KeepSite("slack".into()));
+    assert_ne!(here.outcome, OperationOutcome::NoOp);
+    assert_eq!(kept(&shell).len(), 1);
+    shell.handle_operation(Command::ReleaseSite("slack".into()));
+    assert!(kept(&shell).is_empty());
+    assert_eq!(
+        shell
+            .items
+            .roots(Placement::Favorites { space: home })
+            .len(),
+        1
+    );
 }
 
 #[test]

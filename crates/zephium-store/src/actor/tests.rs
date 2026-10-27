@@ -2347,11 +2347,86 @@ fn valid_multi_profile_compatibility_state_loads_in_canonical_container_order() 
     let state = hub.load().unwrap().unwrap();
     assert_eq!(
         state.items.iter().map(|item| item.id).collect::<Vec<_>>(),
-        vec![first_favorite, second_favorite, first_today, second_today]
+        vec![first_favorite, first_today, second_favorite, second_today]
     );
     assert_eq!(state.active_space, Some(second_space));
     assert_eq!(state.active_item, Some(second_today));
     assert_eq!(state.splits, Some(Pane::Leaf(second_today)));
+}
+
+#[test]
+fn compatibility_essentials_reach_every_space_of_their_profile() {
+    let dir = tempfile::tempdir().unwrap();
+    let profile = ProfileId::from(1);
+    let (first_space, second_space) = (SpaceId::from(11), SpaceId::from(12));
+
+    let mut meta = Connection::open(dir.path().join("meta.sqlite")).unwrap();
+    migrations::apply(&mut meta, migrations::META).unwrap();
+    meta.execute(
+        "INSERT INTO profiles(id, name, kind, position) VALUES (?1, 'Personal', 'default', 0)",
+        [profile.to_string()],
+    )
+    .unwrap();
+    meta.execute(
+        "INSERT INTO state(id, last_profile) VALUES (1, ?1)",
+        [profile.to_string()],
+    )
+    .unwrap();
+    drop(meta);
+
+    let mut conn = Connection::open(dir.path().join(format!("profile-{profile}.sqlite"))).unwrap();
+    migrations::apply(&mut conn, migrations::PROFILE).unwrap();
+    for (position, space) in [first_space, second_space].into_iter().enumerate() {
+        conn.execute(
+            "INSERT INTO spaces(id, name, position) VALUES (?1, 'Space', ?2)",
+            params![space.to_string(), position as i64],
+        )
+        .unwrap();
+    }
+    for (position, id) in [31_u128, 32].into_iter().enumerate() {
+        conn.execute(
+            "INSERT INTO items(
+                 id, parent_id, space_id, section, position, kind, name, url, title, zoom
+             ) VALUES (?1, NULL, NULL, 'favorites', ?2, 'tab', NULL, ?3, 'Favorite', 1)",
+            params![
+                ItemId::from(id).to_string(),
+                position as i64,
+                format!("https://favorite-{position}.example/")
+            ],
+        )
+        .unwrap();
+    }
+    conn.execute(
+        "INSERT INTO focus(id, active_space, active_item, splits) VALUES (1, NULL, NULL, NULL)",
+        [],
+    )
+    .unwrap();
+    drop(conn);
+
+    let mut hub = Hub::open(dir.path().to_path_buf()).unwrap();
+    let state = hub.load().unwrap().unwrap();
+
+    let urls_in = |space: SpaceId| -> Vec<String> {
+        state
+            .items
+            .iter()
+            .filter(|item| item.placement == Placement::Favorites { space })
+            .filter_map(|item| match &item.kind {
+                PersistedKind::Tab { url, .. } => Some(url.clone()),
+                _ => None,
+            })
+            .collect()
+    };
+    let expected = ["https://favorite-0.example/", "https://favorite-1.example/"];
+    assert_eq!(urls_in(first_space), expected);
+    assert_eq!(urls_in(second_space), expected);
+    let kept: Vec<ItemId> = state
+        .items
+        .iter()
+        .filter(|item| item.placement == Placement::Favorites { space: first_space })
+        .map(|item| item.id)
+        .collect();
+    assert_eq!(kept, [ItemId::from(31), ItemId::from(32)]);
 }
 
 #[test]

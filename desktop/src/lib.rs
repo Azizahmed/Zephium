@@ -6055,12 +6055,7 @@ fn build_tab_menu(
     let close = item(7, "Close Tab", true)?;
     let others = item(8, "Close Other Tabs", context.others)?;
     let below = item(9, "Close Tabs Below", context.below)?;
-    // Favorites belong to every space, so only a space's own tab can move.
-    let move_to = if context.essential {
-        None
-    } else {
-        spaces::tab_menu_section(handle, &format!("tabmenu.{}", spaces::TAB_MENU_MOVE))?
-    };
+    let move_to = spaces::tab_menu_section(handle, &format!("tabmenu.{}", spaces::TAB_MENU_MOVE))?;
     let mut items: Vec<&dyn tauri::menu::IsMenuItem<tauri::Wry>> = vec![
         &reload,
         &duplicate,

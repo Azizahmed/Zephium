@@ -337,7 +337,7 @@ impl Shell {
         let needle = q.to_lowercase();
         let mut stack = Vec::new();
         for placement in [
-            Placement::Favorites { profile },
+            Placement::Favorites { space },
             Placement::Space {
                 space,
                 section: SpaceSection::Pinned,
