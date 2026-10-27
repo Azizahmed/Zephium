@@ -180,7 +180,9 @@ mod tests {
         reason = "the fixture parent must exit before its owned descendant"
     )]
     fn process_tree_fixture() {
-        let role = std::env::var(FIXTURE_ROLE).unwrap();
+        let Some(role) = std::env::var_os(FIXTURE_ROLE) else {
+            return;
+        };
         if role == "descendant" {
             std::thread::sleep(Duration::from_secs(60));
             return;
