@@ -94,6 +94,29 @@ pub struct Layout {
 /// it casts over the page while it is shown is not cut off.
 pub const HIDDEN_SHADOW_REACH: f64 = 64.0;
 
+/// The gap a hidden sidebar's card keeps from the window's left, top and
+/// bottom, and the padding it keeps inside its own edge.
+pub const HIDDEN_CARD_INSET: f64 = 8.0;
+
+/// How far from the window's left the card ends, given the width of the
+/// chrome a hidden sidebar keeps beneath the page: the column and its
+/// gutter, the shadow's reach, and the card's padding beyond the column.
+pub fn hidden_card_edge(chrome_width: f64) -> f64 {
+    (chrome_width - HIDDEN_SHADOW_REACH + 2.0 * HIDDEN_CARD_INSET).max(0.0)
+}
+
+/// Where a hidden sidebar's card stands while it is over the page: the column
+/// with the inset all round it, as the frame draws it.
+pub fn hidden_card(window: Size, m: Metrics) -> Rect {
+    let inset = HIDDEN_CARD_INSET;
+    Rect::new(
+        inset,
+        inset,
+        (m.sidebar_width + 2.0 * inset).min((window.width - inset).max(0.0)),
+        (window.height - 2.0 * inset).max(0.0),
+    )
+}
+
 pub fn compute(window: Size, mode: Mode, m: Metrics, content_present: bool) -> Layout {
     match mode {
         Mode::Sidebar => sidebar(window, m, content_present),
@@ -177,6 +200,33 @@ mod tests {
         // Without a page there is nothing to hide beneath.
         let empty = compute(Size::new(1200.0, 800.0), Mode::Sidebar, m, false);
         assert_eq!(empty.chrome, Rect::new(0.0, 0.0, 1200.0, 800.0));
+    }
+
+    #[test]
+    fn the_hidden_card_is_the_column_with_its_inset_and_stays_in_the_window() {
+        assert_eq!(
+            hidden_card(Size::new(1200.0, 800.0), M),
+            Rect::new(8.0, 8.0, 256.0, 784.0)
+        );
+        assert_eq!(
+            hidden_card(Size::new(200.0, 100.0), M),
+            Rect::new(8.0, 8.0, 192.0, 84.0)
+        );
+        // The chrome beneath a hidden 240 column is 8 + 240 + reach wide.
+        let chrome = compute(
+            Size::new(1200.0, 800.0),
+            Mode::Sidebar,
+            Metrics {
+                sidebar_hidden: true,
+                ..M
+            },
+            true,
+        )
+        .chrome;
+        let card = hidden_card(Size::new(1200.0, 800.0), M);
+        assert_eq!(hidden_card_edge(chrome.width), card.x + card.width);
+        let tiny = hidden_card(Size::new(4.0, 4.0), M);
+        assert_eq!((tiny.width, tiny.height), (0.0, 0.0));
     }
 
     #[test]
