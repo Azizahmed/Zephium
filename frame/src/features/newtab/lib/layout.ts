@@ -25,7 +25,9 @@ const CORNER = 110;
 const CONTROL = { size: 32, gap: 6, inset: 14 };
 /** What two round controls take from the corner, which CORNER was set for. */
 const TWO_ROUND = CONTROL.inset + 2 * CONTROL.size + CONTROL.gap;
-/** The date's line, and what stands between the time, the name and it. */
+/** Windows' own caption, which comes out over the window's top-right
+ *  corner: three 44px buttons and their padding (windows_caption_paint.rs). */
+export const WINDOWS_CAPTION = 138;
 /** The line with the time and the date, and its distance under the name. */
 const WHEN = { gap: 16, height: 20 };
 
@@ -35,16 +37,25 @@ const WHEN = { gap: 16, height: 20 };
 export function layout(
   width: number,
   height: number,
-  { controls, clock }: { controls: readonly number[]; clock: boolean },
+  {
+    controls,
+    clock,
+    caption = 0,
+  }: { controls: readonly number[]; clock: boolean; caption?: number },
 ): Layout {
   // Both top corners stay clear of the notch's flare for the controls in
   // one of them, so the field stays in the middle however wide they are.
-  const reach = controls.reduce((sum, w) => sum + w + CONTROL.gap, CONTROL.inset - CONTROL.gap);
+  // A window caption over the corner keeps its own room there, the controls
+  // beside it.
+  const reach = controls.reduce(
+    (sum, w) => sum + w + CONTROL.gap,
+    CONTROL.inset + caption - CONTROL.gap,
+  );
   const corner = Math.max(CORNER, reach + CORNER - TWO_ROUND);
   const notch = { ...NOTCH, width: Math.min(NOTCH.width, width - 2 * corner) };
 
   const buttonY = Math.round((NOTCH.height - CONTROL.size) / 2);
-  let right = width - CONTROL.inset;
+  let right = width - CONTROL.inset - caption;
   const buttons = controls
     .toReversed()
     .map((w) => {

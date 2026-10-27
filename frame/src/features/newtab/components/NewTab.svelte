@@ -20,7 +20,8 @@
   import { readSystemClock, systemHour24 } from "../lib/system-clock.svelte";
   import { focus, localDay } from "$domain/time";
   import { groundPath, notchShape, notchWidth } from "../lib/ground";
-  import { layout, type Box } from "../lib/layout";
+  import { layout, WINDOWS_CAPTION, type Box } from "../lib/layout";
+  import { IS_WINDOWS } from "$shared/platform";
   import { WORDMARK } from "$shared/lib/wordmark";
   import { reducedMotion } from "$shared/lib/motion";
   import {
@@ -159,7 +160,13 @@
     ...(showAccount ? [account.signedIn ? 32 : Math.max(32, signInWidth)] : []),
     ...(oncustomize ? [32] : []),
   ]);
-  let page = $derived(layout(width, height, { controls, clock: showClock }));
+  let page = $derived(
+    layout(width, height, {
+      controls,
+      clock: showClock,
+      caption: IS_WINDOWS ? WINDOWS_CAPTION : 0,
+    }),
+  );
   const at = ({ x, y, w, h }: Box) => `left:${x}px;top:${y}px;width:${w}px;height:${h}px`;
 
   // Day over a light page, night over a dark one.
