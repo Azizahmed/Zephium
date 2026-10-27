@@ -17,6 +17,7 @@ vi.mock("$shared/ipc/bindings", async () => {
   });
 });
 afterEach(() => {
+  vi.useRealTimers();
   operations.dispose();
   localStorage.clear();
 });
@@ -35,7 +36,10 @@ test("completed deletion erases profile drafts after its pending sheet closes an
     },
   });
   await screen.getByRole("button", { name: "Delete Profile…" }).click();
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date", "performance"] });
   await screen.getByRole("button", { name: "Delete Profile", exact: true }).click();
+  await vi.advanceTimersByTimeAsync(5000);
+  vi.useRealTimers();
   await expect.element(screen.getByRole("status")).toHaveTextContent("Deletion is still pending");
   await screen.getByRole("button", { name: "Close", exact: true }).click();
   await screen.unmount();
