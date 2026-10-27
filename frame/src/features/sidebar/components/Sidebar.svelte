@@ -23,7 +23,7 @@
   import { uiCommands as ui } from "$domain/ui-commands";
   import SidebarHeader from "./SidebarHeader.svelte";
   import * as shapeMorph from "../lib/shape-morph";
-  import { duration, reducedMotion } from "$shared/lib/motion";
+  import { duration, easing, reducedMotion } from "$shared/lib/motion";
   import SidebarResizeHandle from "./SidebarResizeHandle.svelte";
 
   let {
@@ -84,6 +84,9 @@
     browserPage.currentPage() === null && !!tabs.activeTab()?.url && !tabs.activeTab()?.loading,
   );
   let away = $state(isHidden());
+  /** How long past the slide's own length native's page may still be on its
+   *  way: it sets off once the layout has crossed to native and back. */
+  const ARRIVAL_MARGIN_MS = 120;
   // What the chrome draws beside the column has no native slide, so the
   // column and it move as one instead: the column pushed out as the new tab
   // takes its room, or drawn back in as it gives it up.
@@ -97,6 +100,29 @@
       "ease-out",
   });
   $effect(() => {
+    if (!hidden && untrack(() => away && peeking && overPage && !reducedMotion())) {
+      // Shown from the card, the card stays over the page while the page
+      // slides out from under it, and becomes the column once it has: gone
+      // beneath at once, it would leave the page bare where the column comes.
+      const handover = setTimeout(
+        () => {
+          const before = columns?.getBoundingClientRect().left;
+          away = false;
+          if (columns && before !== undefined)
+            void tick().then(() => {
+              if (!columns) return;
+              const shift = before - columns.getBoundingClientRect().left;
+              if (Math.abs(shift) >= 0.5)
+                columns.animate([{ translate: `${shift}px 0` }, { translate: "0 0" }], {
+                  duration: duration("base"),
+                  easing: easing("emphasized"),
+                });
+            });
+        },
+        duration("page") + ARRIVAL_MARGIN_MS,
+      );
+      return () => clearTimeout(handover);
+    }
     if (!hidden) {
       const main = untrack(() => away && !overPage && !reducedMotion()) ? beside() : null;
       const before = main?.getBoundingClientRect().left;
@@ -152,7 +178,10 @@
         leaving = null;
       };
     }
-    const covered = setTimeout(() => (away = true), duration("page"));
+    // Native's slide sets off a moment after this one is asked for, so the
+    // column waits until the page has surely covered it: let go before, its
+    // last uncovered strip, the toolbar's first icons, blinks out.
+    const covered = setTimeout(() => (away = true), duration("page") + ARRIVAL_MARGIN_MS);
     return () => clearTimeout(covered);
   });
   // The column becomes the card already out of sight: only from the next
@@ -225,6 +254,8 @@
     return typing || !!aside.querySelector('[data-open="true"]');
   };
   function release() {
+    // Shown from the card, it is becoming the column, not leaving.
+    if (!hidden) return;
     clearTimeout(linger);
     const settling = Math.max(0, opened + SETTLE_MS - performance.now());
     linger = setTimeout(

@@ -964,10 +964,9 @@ impl Shell {
                 }
                 win.metrics.sidebar_hidden = hidden;
                 let id = win.id;
-                if !hidden {
-                    let card = layout::hidden_card(win.size, win.metrics);
-                    let _ = self.engine.raise_chrome(id, false, card, false);
-                }
+                // A sidebar shown from its card leaves the chrome over the
+                // page until the page has slid out from under the column;
+                // the frame puts it back beneath then.
                 let _ = self.engine.hint_stage_motion(id, StageMotion::Slide);
                 let _ = self.relayout_with(true);
             }
