@@ -31,6 +31,9 @@ const SHADOW_BLUR: f32 = 36.0;
 const SHADOW_OPACITY_DARK: f32 = 0.3;
 const SHADOW_OPACITY_LIGHT: f32 = 0.14;
 const FADE: Duration = Duration::from_millis(200);
+/// How far in from the card's edge the shadow's own fill stays: past the
+/// curve of the card's corners, and far too little to show in the shadow.
+const FILL_INSET: f32 = 4.0;
 /// The class wry gives every WebView2 host window.
 const HOST_CLASS: &str = "WRY_WEBVIEW";
 
@@ -173,6 +176,19 @@ impl Shadow {
             })
             .ok()?;
         shadow.SetOpacity(opacity).ok()?;
+        // A shadow takes its shape from what the sprite paints, so it paints
+        // the card's own rectangle. That stays beneath the raised chrome,
+        // drawn in a little from the card's edge so its square corners never
+        // show past the card's rounded ones.
+        let fill = compositor
+            .CreateColorBrushWithColor(Color {
+                A: 255,
+                R: colour.0,
+                G: colour.1,
+                B: colour.2,
+            })
+            .ok()?;
+        sprite.SetBrush(&fill).ok()?;
         sprite.SetShadow(&shadow).ok()?;
         root.Children().ok()?.InsertAtTop(&sprite).ok()?;
         Some(Self {
@@ -189,14 +205,15 @@ impl Shadow {
 
     /// Lies the shadow where the card does, and brings it in if it is not.
     fn show(&self, offset: (i32, i32), size: (i32, i32)) {
+        let inset = FILL_INSET * self.scale;
         let _ = self.sprite.SetOffset(Vector3 {
-            X: offset.0 as f32,
-            Y: offset.1 as f32,
+            X: offset.0 as f32 + inset,
+            Y: offset.1 as f32 + inset,
             Z: 0.0,
         });
         let _ = self.sprite.SetSize(Vector2 {
-            X: size.0 as f32,
-            Y: size.1 as f32,
+            X: (size.0 as f32 - 2.0 * inset).max(0.0),
+            Y: (size.1 as f32 - 2.0 * inset).max(0.0),
         });
         self.generation.set(self.generation.get().wrapping_add(1));
         self.removal.borrow_mut().take();
