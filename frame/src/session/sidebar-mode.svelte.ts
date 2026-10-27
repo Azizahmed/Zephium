@@ -29,8 +29,10 @@ let expandedWidth = $state.raw(240);
 let drag: { mode: SidebarMode; desired: SidebarMode; expanded: number; pending: number } | null =
   null;
 let resizeSettlement = $state(0);
-// One document-local ordering counter, seeded above earlier document owners.
-let resizeRevision = $state(Math.trunc(performance.timeOrigin * 1024));
+// One ordering counter, seeded above every earlier owner: an earlier
+// document, and an earlier copy of this module in the same document, which a
+// module reloaded in place leaves behind with native still holding its count.
+let resizeRevision = $state(Math.trunc((performance.timeOrigin + performance.now()) * 1024));
 export const sidebarResizeRevision = () => resizeRevision;
 export function claimSidebarResizeOwner() {
   return ++resizeRevision;
