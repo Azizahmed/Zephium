@@ -119,7 +119,7 @@ describe("which width changes the page travels with", () => {
     expect(last()[1]).toBe(true);
   });
 
-  it("keeps the sidebar and layout fixed while a guide moves, then commits once", () => {
+  it("keeps the sidebar and layout fixed while a guide moves, then commits once, travelling", () => {
     const originalWidth = expanded();
     const originalMode = sidebarMode();
     const before = native.width.mock.calls.length;
@@ -130,7 +130,7 @@ describe("which width changes the page travels with", () => {
     expect(native.width.mock.calls.length).toBe(before);
     finishSidebarResize(315);
     expect(native.width.mock.calls.length).toBe(before + 1);
-    expect(last()).toEqual([315, false]);
+    expect(last()).toEqual([315, true]);
   });
 
   it("cancellation leaves the original shape untouched and emits no layout", () => {
@@ -150,7 +150,7 @@ describe("which width changes the page travels with", () => {
     beginSidebarResize();
     finishSidebarResize(MAX_EXPANDED_WIDTH + 200);
     expect(expanded()).toBe(MAX_EXPANDED_WIDTH);
-    expect(last()).toEqual([MAX_EXPANDED_WIDTH, false]);
+    expect(last()).toEqual([MAX_EXPANDED_WIDTH, true]);
     beginSidebarResize();
     finishSidebarResize(315);
   });

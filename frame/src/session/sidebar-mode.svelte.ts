@@ -122,10 +122,9 @@ export function beginSidebarResize() {
 export function finishSidebarResize(value: number) {
   if (!drag) return;
   drag = null;
-  const before = mode;
   adoptResizeWidth(value);
-  // Only a change of shape travels; the column animates its width then too.
-  void commands.sidebarSetWidth(effectiveWidth(), mode !== before, resizeRevision);
+  // The page travels to the new edge, as it does from the native guide.
+  void commands.sidebarSetWidth(effectiveWidth(), true, resizeRevision);
 }
 
 export function cancelSidebarResize() {
