@@ -4467,3 +4467,111 @@ fn imported_history_keeps_its_times_and_is_not_added_twice() {
     );
     assert_eq!(hub.import_history(ProfileId::from(99), &visits), None);
 }
+
+#[test]
+fn extension_profile_deletion_erases_registry_temporary_and_owned_staging() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut hub = Hub::open(dir.path().to_path_buf()).unwrap();
+    let state = sample();
+    let profile = state.profiles[0].id;
+    hub.save(&state).unwrap();
+    let root = dir.path().join("webext");
+    let registries = root.join("profiles");
+    std::fs::create_dir_all(&registries).unwrap();
+    let registry = registries.join(format!("{profile}.json"));
+    let temporary = registry.with_extension("json.tmp");
+    std::fs::write(&registry, br#"{"extensions":[]}"#).unwrap();
+    std::fs::write(&temporary, b"private pending access choices").unwrap();
+    let staged = root.join("staging").join(profile.to_string());
+    std::fs::create_dir_all(&staged).unwrap();
+    std::fs::write(staged.join("private-source"), b"private staged package").unwrap();
+    let other = registries.join(format!("{}.json", ProfileId::from(999)));
+    std::fs::write(&other, b"keep other profile").unwrap();
+    assert_eq!(
+        hub.authorize_profile_deletion(profile, &SessionState::default())
+            .unwrap(),
+        ProfileDeletionAuthorizeOutcome::Authorized
+    );
+    assert!(hub.finalize_profile_deletion(profile).unwrap());
+    for path in [&registry, &temporary, &staged] {
+        assert!(
+            !path.exists(),
+            "deleted profile retained {}",
+            path.display()
+        );
+    }
+    assert_eq!(std::fs::read(other).unwrap(), b"keep other profile");
+    drop(hub);
+    let reopened = Hub::open_for_new_process(dir.path().to_path_buf()).unwrap();
+    assert!(reopened.pending_profile_deletions().unwrap().is_empty());
+    assert!(!registry.exists());
+}
+
+#[test]
+fn extension_profile_deletion_revokes_publication_without_waiting_for_ticket_drop() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut hub = Hub::open(dir.path().to_path_buf()).unwrap();
+    let state = sample();
+    let profile = state.profiles[0].id;
+    hub.save(&state).unwrap();
+    let root = dir.path().join("webext");
+    std::fs::create_dir_all(&root).unwrap();
+    let root = std::fs::canonicalize(root).unwrap();
+    let (ticket, unrelated) = {
+        let mut io = zephium_core::extensions::REGISTRY_IO.lock().unwrap();
+        (
+            io.register(root.clone(), profile).unwrap(),
+            io.register(root.clone(), ProfileId::from(999)).unwrap(),
+        )
+    };
+    assert_eq!(
+        hub.authorize_profile_deletion(profile, &SessionState::default())
+            .unwrap(),
+        ProfileDeletionAuthorizeOutcome::Authorized
+    );
+    assert!(hub.finalize_profile_deletion(profile).unwrap());
+    let _io = zephium_core::extensions::REGISTRY_IO.lock().unwrap();
+    assert!(!ticket.allows(&root, profile));
+    assert!(unrelated.allows(&root, ProfileId::from(999)));
+}
+
+#[test]
+fn extension_profile_deletion_does_not_wait_for_package_publication() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut hub = Hub::open(dir.path().to_path_buf()).unwrap();
+    let state = sample();
+    let profile = state.profiles[0].id;
+    hub.save(&state).unwrap();
+    let publication = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(dir.path().join("extension-publication.lock"))
+        .unwrap();
+    publication.lock().unwrap();
+    assert_eq!(
+        hub.authorize_profile_deletion(profile, &SessionState::default())
+            .unwrap(),
+        ProfileDeletionAuthorizeOutcome::Authorized
+    );
+    assert!(hub.finalize_profile_deletion(profile).unwrap());
+}
+
+#[test]
+fn extension_cleanup_failure_keeps_the_deletion_retryable() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut hub = Hub::open(dir.path().to_path_buf()).unwrap();
+    let state = sample();
+    let profile = state.profiles[0].id;
+    hub.save(&state).unwrap();
+    hub.authorize_profile_deletion(profile, &SessionState::default())
+        .unwrap();
+    let root = dir.path().join("webext");
+    std::fs::create_dir(&root).unwrap();
+    std::fs::write(root.join("staging"), b"invalid namespace").unwrap();
+    assert!(hub.finalize_profile_deletion(profile).is_err());
+    assert_eq!(hub.pending_profile_deletions().unwrap().len(), 1);
+    std::fs::remove_file(root.join("staging")).unwrap();
+    assert!(hub.finalize_profile_deletion(profile).unwrap());
+}

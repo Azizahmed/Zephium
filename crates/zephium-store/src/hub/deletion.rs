@@ -459,6 +459,7 @@ fn purge_profile_file(dir: &Path, profile: ProfileId) -> rusqlite::Result<()> {
     // authorization remain and the whole cleanup is retried.
     remove_notes_directory(dir, profile)
         .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
+    remove_extension_profile_artifacts(dir, profile)?;
     let path = dir.join(format!("profile-{profile}.sqlite"));
     if regular_file_exists(&path)? {
         let scrub = scrub_profile_database(&path);
@@ -489,6 +490,41 @@ fn purge_profile_file(dir: &Path, profile: ProfileId) -> rusqlite::Result<()> {
     #[cfg(unix)]
     sync_directory(dir)
         .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
+    Ok(())
+}
+
+fn remove_extension_profile_artifacts(dir: &Path, profile: ProfileId) -> rusqlite::Result<()> {
+    let [registry, temporary, staged] =
+        super::filesystem::extension_profile_artifacts(dir, profile)?;
+    {
+        let mut registry_io = zephium_core::extensions::REGISTRY_IO.lock().map_err(|_| {
+            rusqlite::Error::ToSqlConversionFailure(Box::new(std::io::Error::other(
+                "Extension registry state is unavailable.",
+            )))
+        })?;
+        registry_io.cancel(registry.parent().unwrap().parent().unwrap(), profile);
+        remove_file_if_present(&temporary)?;
+        remove_file_if_present(&registry)?;
+    }
+    match std::fs::symlink_metadata(&staged) {
+        Ok(metadata) if metadata.file_type().is_dir() => std::fs::remove_dir_all(&staged),
+        Ok(_) => std::fs::remove_file(&staged),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error),
+    }
+    .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
+    #[cfg(unix)]
+    for parent in [
+        registry.parent().unwrap(),
+        staged.parent().unwrap(),
+        registry.parent().unwrap().parent().unwrap(),
+    ] {
+        match sync_directory(parent) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(rusqlite::Error::ToSqlConversionFailure(Box::new(error))),
+        }
+    }
     Ok(())
 }
 
