@@ -44,6 +44,7 @@ runs:
         parameters: |
           version: ${{ toJSON(steps.request.outputs.version) }}
     - name: Verify signed output before resuming packaging
+      timeout-minutes: 5
       shell: pwsh
       env:
         SIGNING_ROLE: ${{ inputs.role }}

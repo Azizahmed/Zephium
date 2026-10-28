@@ -83,7 +83,9 @@ release and has no repository write permission.
 
 For cryptographic verification of the self-signed certificate, the workflow
 temporarily trusts ONLY the independently pinned public test certificate in the
-disposable runner's CurrentUser root store. Cleanup removes that added entry.
+disposable runner's LocalMachine root store (the CurrentUser store can show an
+interactive confirmation dialog). Cleanup removes that added entry. No developer
+or end-user machine is modified, and output verification has a five-minute timeout.
 Production uses ordinary Windows trust validation and requires a timestamp.
 Never install the test root on an end user's machine. Test artifacts expire in
 seven days and must never be uploaded as public release assets.

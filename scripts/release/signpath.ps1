@@ -25,23 +25,29 @@ function Assert-Metadata([string]$Path) {
 }
 function Assert-Signature([string]$Path) {
     Assert-Metadata $Path
+    Write-Host "Checking Authenticode signature: $Path"
     $signature = Get-AuthenticodeSignature -LiteralPath $Path
+    Write-Host "Initial Authenticode status: $($signature.Status)"
     if (!$signature.SignerCertificate -or $signature.SignerCertificate.Thumbprint -ne $config.thumbprint) {
         throw "Unexpected or missing signing certificate on $Path"
     }
     if ($config.policy -eq 'test-signing') {
         # Trust ONLY the pinned public test certificate, ONLY in this disposable
         # GitHub-hosted runner. Cleanup removes it; never do this on user PCs.
-        $certPath = "Cert:\CurrentUser\Root\$($config.thumbprint)"
+        # The current-user Root provider can display a confirmation dialog.
+        # Use the hosted VM's machine store for unattended test validation.
+        $certPath = "Cert:\LocalMachine\Root\$($config.thumbprint)"
         if (!(Test-Path $certPath)) {
             if ($env:GITHUB_ACTIONS -ne 'true' -or $env:RUNNER_ENVIRONMENT -ne 'github-hosted') {
                 throw 'Test certificate trust is restricted to disposable GitHub-hosted runners'
             }
-            $store = [Security.Cryptography.X509Certificates.X509Store]::new('Root', 'CurrentUser')
+            $store = [Security.Cryptography.X509Certificates.X509Store]::new('Root', 'LocalMachine')
             try {
                 $store.Open('ReadWrite')
-                $store.Add($signature.SignerCertificate)
+                # Record cleanup responsibility before adding the certificate.
                 [IO.File]::WriteAllText((Join-Path $State 'test-trust-added'), $config.thumbprint)
+                Write-Host "Adding pinned public test certificate to disposable runner: $($config.thumbprint)"
+                $store.Add($signature.SignerCertificate)
             } finally { $store.Close() }
         }
         $signature = Get-AuthenticodeSignature -LiteralPath $Path
@@ -50,6 +56,7 @@ function Assert-Signature([string]$Path) {
     if ($config.policy -eq 'release-signing' -and !$signature.TimeStamperCertificate) {
         throw "Production signature has no timestamp: $Path"
     }
+    Write-Host "Verified Authenticode signature and expected certificate: $Path"
 }
 function Wait-File([string]$Path, [int]$Seconds = 600) {
     $deadline = [DateTime]::UtcNow.AddSeconds($Seconds)
@@ -224,7 +231,7 @@ try {
                 & taskkill.exe /PID $workerId /T /F 2>$null
             }
             if (Test-Path "$State/test-trust-added") {
-                Remove-Item "Cert:\CurrentUser\Root\$($config.thumbprint)" -ErrorAction SilentlyContinue
+                Remove-Item "Cert:\LocalMachine\Root\$($config.thumbprint)" -ErrorAction Stop
             }
             foreach ($log in @('bundle.stdout.log','bundle.stderr.log')) {
                 if (Test-Path "$State/$log") { Get-Content "$State/$log" -Tail 100 }
