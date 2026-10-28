@@ -1513,7 +1513,12 @@ fn first_visit_lands_even_inside_the_save_debounce() {
     // save is still pending (debounced) when the visit arrives
     store.save_session(sample());
     store.record_visit(profile, "https://news.ycombinator.com/".into(), "HN".into());
-    let hits = store.search_history(profile, "news", 10);
+    let (reply, received) = mpsc::channel();
+    store
+        .tx
+        .send(Cmd::SearchHistory(profile, "news".into(), 10, reply))
+        .unwrap();
+    let hits = received.recv_timeout(REPLY_TIMEOUT).unwrap();
     assert_eq!(hits.len(), 1, "visit must not race the registry flush");
 }
 
