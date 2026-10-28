@@ -348,9 +348,14 @@ pub enum Command {
     FocusWake,
     /// A quiet tab's speaker is due to go.
     AudioWake,
-    /// Writes what was read from another browser into the focused profile,
-    /// restoring the session first when it has not been yet (onboarding).
+    /// Captures one persistent destination before any source reads begin,
+    /// restoring the session first for onboarding.
+    ImportDestination {
+        done: ImportDestinationCompletion,
+    },
+    /// Writes one kind into the destination admitted for the whole job.
     Import {
+        profile: ProfileId,
         work: Box<crate::store_reads::ImportWork>,
         done: ImportCompletion,
     },
@@ -1142,6 +1147,28 @@ impl ExportCompletion {
 impl fmt::Debug for ExportCompletion {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str("ExportCompletion")
+    }
+}
+#[derive(Clone)]
+pub struct ImportDestinationCompletion(Completion<Option<ProfileId>>);
+impl ImportDestinationCompletion {
+    pub fn new(done: impl FnOnce(Option<ProfileId>) + Send + 'static) -> Self {
+        Self(Arc::new(Mutex::new(Some(Box::new(done)))))
+    }
+    pub fn finish(self, profile: Option<ProfileId>) {
+        let done = self
+            .0
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .take();
+        if let Some(done) = done {
+            done(profile);
+        }
+    }
+}
+impl fmt::Debug for ImportDestinationCompletion {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("ImportDestinationCompletion")
     }
 }
 #[derive(Clone)]

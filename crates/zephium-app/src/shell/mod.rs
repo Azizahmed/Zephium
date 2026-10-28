@@ -1024,7 +1024,12 @@ impl Shell {
                 call,
                 done,
             } => self.bookmark_call(expected_profile, *call, done),
-            Command::Import { work, done } => self.import_into_focused(*work, done),
+            Command::ImportDestination { done } => done.finish(self.import_destination()),
+            Command::Import {
+                profile,
+                work,
+                done,
+            } => self.import_into_profile(profile, *work, done),
             Command::Export { kind, done } => self.export_from_focused(kind, done),
             Command::AttachFaviconProber(attachment) => self.attach_favicon_prober(attachment.0),
             Command::ProbeFavicons { profile, origins } => self.probe_favicons(profile, origins),

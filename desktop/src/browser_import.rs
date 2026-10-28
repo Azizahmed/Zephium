@@ -1,6 +1,6 @@
 //! Bringing bookmarks and history over from another browser. Reading happens
 //! on a blocking worker from fresh discovery, never from a path chrome named;
-//! writing goes through the shell into the focused profile. Progress reaches
+//! writing goes through the shell into one admitted destination. Progress reaches
 //! chrome as whole snapshots of the one job that may run at a time.
 
 use super::*;
@@ -151,7 +151,7 @@ pub(crate) async fn import_sources(caller: WebviewWindow) -> Vec<ImportSourceVie
 /// profile. Refused while another import runs.
 #[tauri::command]
 #[specta::specta]
-pub(crate) fn import_start(
+pub(crate) async fn import_start(
     caller: WebviewWindow,
     app: tauri::AppHandle,
     source: String,
@@ -187,9 +187,38 @@ pub(crate) fn import_start(
         .into_iter()
         .filter(|kind| kinds.contains(kind))
         .collect();
+    let Some(shell) = app.try_state::<Handle>().map(|shell| shell.inner().clone()) else {
+        *jobs
+            .running
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+        return false;
+    };
+    let (send, receive) = tokio::sync::oneshot::channel();
+    let admitted = shell.dispatch(Command::ImportDestination {
+        done: zephium_app::ImportDestinationCompletion::new(move |destination| {
+            let _ = send.send(destination);
+        }),
+    });
+    let destination = if admitted {
+        tokio::time::timeout(WRITE_DEADLINE, receive)
+            .await
+            .ok()
+            .and_then(Result::ok)
+            .flatten()
+    } else {
+        None
+    };
+    let Some(destination) = destination else {
+        *jobs
+            .running
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+        return false;
+    };
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
-        run(&app, browser, profile, ordered, cancelled).await;
+        run(&app, browser, profile, destination, ordered, cancelled).await;
         if let Some(jobs) = app.try_state::<ImportJobs>() {
             *jobs
                 .running
@@ -240,6 +269,7 @@ async fn run(
     app: &tauri::AppHandle,
     browser: Browser,
     profile: String,
+    destination: zephium_core::ids::ProfileId,
     kinds: Vec<ImportKindView>,
     cancelled: Arc<AtomicBool>,
 ) {
@@ -282,7 +312,7 @@ async fn run(
                     job.cancelled = true;
                 } else {
                     sites.note(&work);
-                    match write(app, work).await {
+                    match write(app, destination, work).await {
                         Some(added) => {
                             progress.done = added;
                             progress.state = ImportStateView::Done;
@@ -301,7 +331,7 @@ async fn run(
     // imported rows show real marks without asking any site.
     #[cfg(feature = "work-product")]
     if !job.cancelled && !cancelled.load(Ordering::Acquire) {
-        import_icons(app, browser, &profile, sites.wanted()).await;
+        import_icons(app, browser, &profile, destination, sites.wanted()).await;
     }
     #[cfg(not(feature = "work-product"))]
     let _ = sites;
@@ -376,6 +406,7 @@ async fn import_icons(
     app: &tauri::AppHandle,
     browser: Browser,
     profile: &str,
+    destination: zephium_core::ids::ProfileId,
     wanted: Vec<String>,
 ) {
     if wanted.is_empty() {
@@ -400,7 +431,7 @@ async fn import_icons(
     .unwrap_or_default();
     // Sent even when empty: storing it is what refreshes the sidebar, so a
     // source with no icons of its own still has its Essentials fetched.
-    let _ = write(app, zephium_app::ImportWork::Icons(icons)).await;
+    let _ = write(app, destination, zephium_app::ImportWork::Icons(icons)).await;
 }
 
 async fn read(
@@ -470,10 +501,15 @@ fn links(nodes: &[zephium_import::ImportNode]) -> u32 {
         .fold(0u32, u32::saturating_add)
 }
 
-async fn write(app: &tauri::AppHandle, work: zephium_app::ImportWork) -> Option<u32> {
+async fn write(
+    app: &tauri::AppHandle,
+    profile: zephium_core::ids::ProfileId,
+    work: zephium_app::ImportWork,
+) -> Option<u32> {
     let shell = app.try_state::<Handle>()?.inner().clone();
     let (send, receive) = tokio::sync::oneshot::channel();
     if !shell.dispatch(Command::Import {
+        profile,
         work: Box::new(work),
         done: zephium_app::ImportCompletion::new(move |added| {
             let _ = send.send(added);
