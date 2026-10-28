@@ -111,9 +111,9 @@ contract:
 | `latest.json` | Updater manifest (`darwin-aarch64[-app]`, `windows-x86_64[-nsis]`) |
 | `SHA256SUMS` | Digests of every other asset |
 
-Renaming does not invalidate an updater signature: minisign signs the bytes,
-and the build-time file name in its trusted comment is not checked by the
-updater.
+Renaming does not invalidate an updater signature. Windows signatures bind the
+release version and `windows-x86_64-nsis` target as well as the final bytes;
+the updater rejects an unbound or mismatched signature.
 
 ## What the workflow verifies
 
@@ -137,8 +137,9 @@ Download them for any release you need to symbolicate later.
 The Windows installer is not Authenticode-signed yet, so SmartScreen warns on
 first run. When SignPath is added, signing goes in the marked spot in the
 Windows job and must come **before** the updater signature: Authenticode
-changes the installer's bytes, so sign it first, then replace Tauri's `.sig`
-by running `pnpm tauri signer sign` over the signed file.
+changes the installer's bytes. The following `sign-windows-updater` step signs
+those final bytes with the authenticated version and target. Keep that step
+after publisher signing and before staging the release assets.
 
 Until then, SmartScreen judges each installer by its own download reputation.
 After publishing, submit `Zephium-Windows-x64-setup.exe` at

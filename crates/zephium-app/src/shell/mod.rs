@@ -771,7 +771,9 @@ impl Shell {
             Command::SetWebExtensions {
                 profile,
                 extensions,
-            } => self.set_web_extensions(profile, extensions),
+                failures,
+                retry,
+            } => self.set_prepared_web_extensions(profile, extensions, failures, retry),
             Command::OpenWebExtensionOptions {
                 profile,
                 extension_id,

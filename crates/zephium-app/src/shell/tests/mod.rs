@@ -2319,5 +2319,7 @@ mod zoom;
 
 mod blocker_sites;
 
+mod webext;
+
 #[cfg(target_os = "windows")]
 mod webext_windows;
