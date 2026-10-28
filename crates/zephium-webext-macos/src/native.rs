@@ -115,12 +115,19 @@ fn open(
 ) -> Result<Rc<Connection>, String> {
     // The browser's own bridges never reach this point; outside hosts are
     // only for extensions that declared them, as the install review showed.
-    let declared = unsafe { context.webExtension().requestedPermissions() }
-        .containsObject(&NSString::from_str("nativeMessaging"));
-    if !declared {
+    let extension = unsafe { context.uniqueIdentifier() }.to_string();
+    let allowed = shared
+        .loaded
+        .borrow()
+        .get(&extension)
+        .is_some_and(|loaded| {
+            loaded.external_native_messaging
+                && std::ptr::eq(&*loaded.context, context)
+                && unsafe { context.hasPermission(&NSString::from_str("nativeMessaging")) }
+        });
+    if !allowed {
         return Err("Access to native messaging requires nativeMessaging permission.".into());
     }
-    let extension = unsafe { context.uniqueIdentifier() }.to_string();
     let running = CONNECTIONS.with(|connections| {
         connections
             .borrow()
@@ -157,6 +164,82 @@ fn open(
     });
     CONNECTIONS.with(|connections| connections.borrow_mut().insert(key, connection.clone()));
     Ok(connection)
+}
+
+/// Main-thread qualification used only by the standalone lab. The invalid
+/// hostname stops an admitted request before any host registration is read.
+#[cfg(feature = "lab")]
+pub(crate) fn verify_open_admission(shared: &Rc<Shared>, id: &str) -> Result<(), String> {
+    use objc2::{MainThreadMarker, MainThreadOnly};
+    use objc2_web_kit::WKWebExtensionContextPermissionStatus;
+    let mtm = MainThreadMarker::new().ok_or("native admission probe needs the main thread")?;
+    let context = shared
+        .loaded
+        .borrow()
+        .get(id)
+        .map(|loaded| loaded.context.clone())
+        .ok_or("fixture extension was not loaded")?;
+    let check = |context: &WKWebExtensionContext, expected: &str| match open(
+        shared,
+        context,
+        "../no-host-lookup",
+        None,
+        None,
+    ) {
+        Err(error) if error == expected => Ok(()),
+        Err(error) => Err(format!(
+            "native admission returned {error}; expected {expected}"
+        )),
+        Ok(connection) => {
+            connection.close(None);
+            Err("native admission unexpectedly opened a host".into())
+        }
+    };
+    const DENIED: &str = "Access to native messaging requires nativeMessaging permission.";
+    check(&context, "Invalid native messaging host name specified.")?;
+    shared
+        .loaded
+        .borrow_mut()
+        .get_mut(id)
+        .unwrap()
+        .external_native_messaging = false;
+    let unreviewed = check(&context, DENIED);
+    shared
+        .loaded
+        .borrow_mut()
+        .get_mut(id)
+        .unwrap()
+        .external_native_messaging = true;
+    unreviewed?;
+    let mismatch = unsafe {
+        WKWebExtensionContext::initForExtension(
+            WKWebExtensionContext::alloc(mtm),
+            &context.webExtension(),
+        )
+    };
+    let permission = NSString::from_str("nativeMessaging");
+    unsafe {
+        mismatch.setUniqueIdentifier(&NSString::from_str(id));
+        mismatch.setPermissionStatus_forPermission(
+            WKWebExtensionContextPermissionStatus::GrantedExplicitly,
+            &permission,
+        );
+    }
+    check(&mismatch, DENIED)?;
+    let loaded = shared.loaded.borrow_mut().remove(id).unwrap();
+    let unloaded = check(&context, DENIED);
+    shared.loaded.borrow_mut().insert(id.to_owned(), loaded);
+    unloaded?;
+    let previous = unsafe { context.permissionStatusForPermission(&permission) };
+    unsafe {
+        context.setPermissionStatus_forPermission(
+            WKWebExtensionContextPermissionStatus::DeniedExplicitly,
+            &permission,
+        )
+    };
+    let no_permission = check(&context, DENIED);
+    unsafe { context.setPermissionStatus_forPermission(previous, &permission) };
+    no_permission
 }
 
 impl Connection {

@@ -1495,13 +1495,12 @@ These inherited properties must not be overstated:
   macOS 14.0 or newer.
 - Before Tauri constructs any WebView, runtime admission requires macOS 14 or newer
   with Safari 26 or newer. The reviewed recommendation is Sonoma 14.8.9 with
-  Safari 26.6.1, Sequoia 15.8.1 or Tahoe 26.7.1 with Safari 27 (which carries
-  WebKit fixes those point releases do not), or macOS 27.0.1 (September 14/28
-  releases). A supported system below that, or one whose canonical Safari bundle
+  Safari 26.6.1, Sequoia 15.8.2 or Tahoe 26.7.2 with Safari 27.2, or macOS
+  27.2 (October 26 security releases, reviewed October 27). A supported system below that, or one whose canonical Safari bundle
   build differs from the loaded `com.apple.WebKit` framework build, starts with
   an update-recommended advisory. Newer major lines (macOS 28, Safari 28)
   receive an unreviewed-runtime advisory. The review expires for CI/release
-  after October 31, while runtime
+  after November 3, while runtime
   keeps starting and reports review age to privileged chrome.
 - Overlay configuration keeps Tao's allocated `TaoWindow` class and instance layout
   intact. Zephium does not use `object_setClass` to turn that live object into an
@@ -2064,3 +2063,25 @@ mechanisms, not a sandbox. The retained runner uses a fixed environment and no U
 login shell. Native Windows runtime qualification remains outstanding. This policy
 cannot identify secrets stored in arbitrary ordinary file contents and is not a
 claim of complete secret detection or same-user process isolation.
+
+Profile deletion removes the exact extension registry, its temporary file and
+profile-owned staging through the existing deletion journal. Cleanup failures
+retain that journal entry for retry. Package preparation does not hold a profile
+lifetime lease. Shared package collection remains with the extension cache prune.
+
+Startup compatibility rebuilding runs on the blocking worker pool, using
+profile-independent temporary package directories. Prepared registry commits
+compare the exact captured registry bytes under a short commit/unlink guard;
+profile deletion, uninstall and newer access choices win over stale work.
+That guard never covers package preparation or native work and does not lease a
+profile lifetime. Shutdown seals background admission, and the shell rejects
+late results for missing, deleting or private profiles. Bounded preparation
+failures join the existing per-profile extension status readback; Retry carries
+the displayed profile and installation identity in one native request.
+
+Ordinary extension mutations cannot recreate a missing registry. A fresh install
+registers a bounded, revocable ticket before final native profile validation;
+Store deletion cancels matching live tickets under the registry guard. A ticket
+holds no deletion lease and dead tickets leave no profile history. Once startup
+restore finishes, a missing runtime status is a visible failure even if bounded
+actor admission rejected the startup delivery.

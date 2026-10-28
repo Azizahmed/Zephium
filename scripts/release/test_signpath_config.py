@@ -28,17 +28,19 @@ class SignPathConfigurationTests(unittest.TestCase):
         # Reserve thirty minutes for tool/dependency setup, verification and uploads.
         self.assertGreaterEqual(job, build_minutes + signing_minutes + 30)
 
-    def test_final_updater_signature_uses_the_standalone_tauri_signer_after_signpath(self):
+    def test_final_updater_signature_binds_version_and_target_after_signpath(self):
         workflow = (ROOT / '.github/workflows/release.yml').read_text()
         windows = workflow.split('\n  windows:\n', 1)[1].split('\n  publish:\n', 1)[0]
-        signer = windows.split('      - name: Re-sign the Windows updater after publisher signing\n', 1)[1].split('\n      - name:', 1)[0]
-        self.assertIn("if: needs.gate.outputs.signpath == 'true'", signer)
-        self.assertIn('working-directory: desktop', signer)
-        self.assertIn('pnpm tauri signer sign "../target/release/bundle/nsis/Zephium_${VERSION}_x64-setup.exe"', signer)
+        signer = windows.split('      - name: Sign the final Windows bytes for the updater\n', 1)[1].split('\n      - name:', 1)[0]
+        self.assertNotIn('        if:', signer)
+        self.assertNotIn('working-directory:', signer)
+        self.assertIn('cargo run --locked -p xtask -- sign-windows-updater', signer)
+        self.assertIn('"target/release/bundle/nsis/Zephium_${VERSION}_x64-setup.exe" "${VERSION}"', signer)
         self.assertIn('TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}', signer)
-        self.assertLess(windows.index('Copy-Item -LiteralPath $signed'), windows.index('Re-sign the Windows updater after publisher signing'))
-        self.assertLess(windows.index('Re-sign the Windows updater after publisher signing'), windows.index('Stage release assets'))
-        self.assertNotIn('sign-windows-updater', signer)
+        self.assertLess(windows.index('Copy-Item -LiteralPath $signed'), windows.index('Sign the final Windows bytes for the updater'))
+        self.assertLess(windows.index('Sign the final Windows bytes for the updater'), windows.index('Stage release assets'))
+        self.assertEqual(windows.count('sign-windows-updater'), 1)
+        self.assertNotIn('pnpm tauri signer sign', windows)
 
     def run_config(self, configured):
         with tempfile.TemporaryDirectory() as directory:

@@ -50,6 +50,15 @@ autofill, idle detection and extension-managed downloads. An active extension
 can still have these feature limitations. Browser passkeys also depend on the
 platform and signed application's capabilities.
 
+## Native app access
+
+External native applications on macOS require a publisher-verified CRX and the
+original `nativeMessaging` permission accepted during install review. The browser's
+compatibility transport does not grant that access. Unsigned development packages,
+legacy records without reviewed provenance, and optional native-app permissions
+without a separate reviewed grant are denied; review a signed install to grant
+required access. Replacing or unloading its native context retires the authority.
+
 ## Compatibility and resource limits
 
 Dark Reader, Vimium, 1Password and JSON Formatter have real workflow evidence on macOS; other

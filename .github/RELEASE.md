@@ -156,9 +156,9 @@ contract:
 | `latest.json` | Updater manifest (`darwin-aarch64[-app]`, `windows-x86_64[-nsis]`) |
 | `SHA256SUMS` | Digests of every other asset |
 
-Renaming does not invalidate an updater signature: minisign signs the bytes,
-and the build-time file name in its trusted comment is not checked by the
-updater.
+Renaming does not invalidate an updater signature. Windows signatures bind the
+release version and `windows-x86_64-nsis` target as well as the final bytes;
+the updater rejects an unbound or mismatched signature.
 
 ## What the workflow verifies
 
@@ -209,8 +209,10 @@ key secrets are still required independently.
 The Windows job uploads `signpath-unsigned-windows-x64`, waits for approval,
 verifies `Get-AuthenticodeSignature` is `Valid`, checks the exact subject and a
 timestamp, then replaces the setup. Only afterwards does
-`pnpm tauri signer sign <setup>` regenerate the updater signature over the final
-bytes; the draft job verifies it against the configured public key. Signing failures never
+`cargo run --locked -p xtask -- sign-windows-updater <setup> <version>`
+regenerates the updater signature over the final bytes, binding the version and
+target. This step also runs when SignPath is inactive; the draft job verifies
+the signature against the configured public key. Signing failures never
 fall back to unsigned assets. The action is pinned to verified v3.0 commit
 `f6d04783b4569d051e0c80105fe66e82819d0092`.
 

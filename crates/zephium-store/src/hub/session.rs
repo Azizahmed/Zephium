@@ -247,6 +247,205 @@ fn decode_authoritative_snapshot(data: &str) -> Option<SessionState> {
         .map(SessionState::from)
 }
 
+const SESSION_BACKUP_LIFETIME_SECS: i64 = 30 * 24 * 3600;
+
+pub(super) struct SessionBackupExpiry {
+    saved_at: i64,
+    expires_at: std::time::Instant,
+    retry_at: Option<std::time::Instant>,
+}
+
+fn snapshot_names_profile(state: &SessionState, profile: ProfileId) -> bool {
+    state.profiles.iter().any(|entry| entry.id == profile)
+        || state.spaces.iter().any(|space| space.profile == profile)
+        || state.items.iter().any(|item| matches!(item.placement, Placement::Favorites { profile: owner } if owner == profile))
+        || state.recently_closed.iter().any(|entry| entry.profile == profile)
+}
+
+/// Unreadable recovery bytes cannot justify retaining a possible copy of
+/// erased data. SQL failures still leave the deletion obligation pending.
+pub(super) fn discard_profile_backup(
+    meta: &Connection,
+    profile: ProfileId,
+) -> rusqlite::Result<bool> {
+    let backup = meta
+        .query_row(
+            "SELECT CASE WHEN typeof(schema_version) = 'integer' THEN schema_version ELSE -1 END,
+                    CASE WHEN length(CAST(data AS BLOB)) <= ?1 THEN CAST(data AS BLOB) END
+             FROM session_snapshot_backup WHERE id = 1",
+            [MAX_SESSION_SNAPSHOT_BYTES as i64],
+            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, Option<Vec<u8>>>(1)?)),
+        )
+        .optional();
+    let (version, data) = match backup {
+        Ok(Some(backup)) => backup,
+        Ok(None) => return Ok(false),
+        Err(_) => {
+            return meta
+                .execute("DELETE FROM session_snapshot_backup WHERE id = 1", [])
+                .map(|removed| removed > 0);
+        }
+    };
+    let state = (version == SESSION_SCHEMA_VERSION)
+        .then_some(data)
+        .flatten()
+        .and_then(|data| String::from_utf8(data).ok())
+        .and_then(|data| decode_authoritative_snapshot(&data));
+    if state
+        .as_ref()
+        .is_some_and(|state| !snapshot_names_profile(state, profile))
+    {
+        return Ok(false);
+    }
+    if meta.execute("DELETE FROM session_snapshot_backup WHERE id = 1", [])? != 1 {
+        return Err(invalid_data(
+            "session backup disposal did not remove its row",
+        ));
+    }
+    Ok(true)
+}
+
+/// Runs after the disposal transaction commits. SQLite reports a busy
+/// checkpoint as a successful query with a nonzero first result column.
+/// Call even when the row is already gone: an earlier attempt may have
+/// deleted it while an older WAL reader prevented retiring its frames.
+pub(super) fn checkpoint_session_backup(meta: &Connection) -> rusqlite::Result<()> {
+    let previous_timeout: u64 = meta.query_row("PRAGMA busy_timeout", [], |row| row.get(0))?;
+    // A pinned WAL reader must defer cleanup immediately, without spending
+    // the Store actor's ordinary write budget or delaying startup.
+    meta.busy_timeout(std::time::Duration::ZERO)?;
+    let result = meta.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |row| {
+        Ok((
+            row.get::<_, i64>(0)?,
+            row.get::<_, i64>(1)?,
+            row.get::<_, i64>(2)?,
+        ))
+    });
+    // Restore before propagating either a SQL error or SQLite's busy row.
+    meta.busy_timeout(std::time::Duration::from_millis(previous_timeout))?;
+    let result = result?;
+    if result != (0, 0, 0) && result != (0, -1, -1) {
+        return Err(invalid_data("session backup WAL checkpoint is pending"));
+    }
+    Ok(())
+}
+
+impl Hub {
+    pub(super) fn arm_session_backup_expiry(&mut self) -> rusqlite::Result<()> {
+        let saved_at = self
+            .meta
+            .query_row(
+                "SELECT CASE WHEN typeof(saved_at) = 'integer' THEN saved_at ELSE 0 END
+             FROM session_snapshot_backup WHERE id = 1",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()
+            .unwrap_or(Some(0));
+        self.session_backup_expiry = saved_at.map(|saved_at| {
+            let remaining = now_secs()
+                .checked_sub(saved_at)
+                .filter(|age| saved_at > 0 && (0..SESSION_BACKUP_LIFETIME_SECS).contains(age))
+                .map_or(0, |age| SESSION_BACKUP_LIFETIME_SECS - age);
+            SessionBackupExpiry {
+                saved_at,
+                expires_at: std::time::Instant::now()
+                    + std::time::Duration::from_secs(remaining as u64),
+                retry_at: None,
+            }
+        });
+        self.prune_expired_session_backup()
+    }
+
+    pub(crate) fn session_backup_deadline(&self) -> Option<std::time::Instant> {
+        self.session_backup_expiry
+            .as_ref()
+            .map(|expiry| expiry.retry_at.unwrap_or(expiry.expires_at))
+    }
+
+    pub(crate) fn prune_expired_session_backup(&mut self) -> rusqlite::Result<()> {
+        let Some(expiry) = &self.session_backup_expiry else {
+            return Ok(());
+        };
+        let instant = std::time::Instant::now();
+        if expiry.retry_at.is_some_and(|retry| instant < retry) {
+            return Ok(());
+        }
+        let valid_age = now_secs().checked_sub(expiry.saved_at).is_some_and(|age| {
+            expiry.saved_at > 0 && (0..SESSION_BACKUP_LIFETIME_SECS).contains(&age)
+        });
+        if valid_age && instant < expiry.expires_at {
+            return Ok(());
+        }
+        let result = (|| {
+            self.meta
+                .execute("DELETE FROM session_snapshot_backup WHERE id = 1", [])?;
+            let remains: bool = self.meta.query_row(
+                "SELECT EXISTS(SELECT 1 FROM session_snapshot_backup WHERE id = 1)",
+                [],
+                |row| row.get(0),
+            )?;
+            if remains {
+                return Err(invalid_data("expired session backup was not removed"));
+            }
+            checkpoint_session_backup(&self.meta)
+        })();
+        if let Err(error) = result {
+            if let Some(expiry) = &mut self.session_backup_expiry {
+                expiry.retry_at = Some(instant + std::time::Duration::from_secs(30));
+            }
+            return Err(error);
+        }
+        self.session_backup_expiry = None;
+        Ok(())
+    }
+
+    pub(crate) fn discard_session_backup(&mut self, profile: ProfileId) -> rusqlite::Result<()> {
+        if !self.registry.contains(&profile) || self.recovery_required.is_some() {
+            return Err(invalid_data("session backup profile is unavailable"));
+        }
+        let replacement = self
+            .pending_session_backup
+            .as_ref()
+            .and_then(|source| {
+                let state = std::str::from_utf8(source)
+                    .ok()
+                    .and_then(decode_authoritative_snapshot)?;
+                snapshot_names_profile(&state, profile)
+                    .then(|| serde_json::to_string(&core_session::canonicalize(state)))
+            })
+            .transpose()
+            .map_err(|_| invalid_data("session backup repair could not be encoded"))?;
+        let tx = self.meta.transaction()?;
+        let removed = discard_profile_backup(&tx, profile)?;
+        if let (Some(source), Some(replacement)) = (&self.pending_session_backup, &replacement) {
+            // A later load must not turn the just-erased raw source into a
+            // pending backup again. Keep the current canonical session.
+            if tx.execute(
+                "UPDATE session_snapshot SET data = ?1
+                 WHERE id = 1 AND schema_version = ?2 AND CAST(data AS BLOB) = ?3",
+                params![replacement, SESSION_SCHEMA_VERSION, source],
+            )? != 1
+            {
+                return Err(invalid_data(
+                    "session backup source changed during disposal",
+                ));
+            }
+        }
+        tx.commit()?;
+        self.session_backup_checkpoint_pending |= removed || replacement.is_some();
+        if replacement.is_some() {
+            self.pending_session_backup = None;
+            self.committed_session = None;
+        }
+        if self.session_backup_checkpoint_pending {
+            checkpoint_session_backup(&self.meta)?;
+            self.session_backup_checkpoint_pending = false;
+        }
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod qa_settings_recovery_tests {
     use super::*;
@@ -364,28 +563,945 @@ mod qa_settings_recovery_tests {
     }
 
     #[test]
-    fn a_session_saved_under_older_canonical_rules_recovers_in_canonical_form() {
-        let (dir, mut state) = marked_directory(REASON);
-        let meta = Connection::open(dir.path().join("meta.sqlite")).unwrap();
-        state.active_item = Some(ItemId::from(999_999));
-        let data = serde_json::to_string(&state).unwrap();
-        meta.execute(
-            "UPDATE session_snapshot SET data = ?1 WHERE id = 1",
-            [&data],
-        )
-        .unwrap();
-        meta.execute(
-            "UPDATE session_recovery SET data = ?1 WHERE id = 1",
-            [data.as_bytes()],
-        )
-        .unwrap();
-        drop(meta);
+    fn noncanonical_sessions_restore_and_keep_exact_source_before_first_save() {
+        for damage in ["dangling-parent", "duplicate-item", "unknown-space-owner"] {
+            let dir = tempfile::tempdir().unwrap();
+            let mut state = saved_qa_session();
+            Hub::open(dir.path().to_path_buf())
+                .unwrap()
+                .save(&state)
+                .unwrap();
+            match damage {
+                "dangling-parent" => state.items[0].parent = Some(ItemId::from(999)),
+                "duplicate-item" => state.items.push(state.items[0].clone()),
+                "unknown-space-owner" => state.spaces[0].profile = ProfileId::from(999),
+                _ => unreachable!(),
+            }
+            let canonical = core_session::canonicalize(state.clone());
+            assert_ne!(canonical, state);
+            let original = format!("  {}\n", serde_json::to_string_pretty(&state).unwrap());
+            let meta = Connection::open(dir.path().join("meta.sqlite")).unwrap();
+            meta.execute(
+                "UPDATE session_snapshot SET data = ?1 WHERE id = 1",
+                [&original],
+            )
+            .unwrap();
+            for _ in 0..2 {
+                let mut hub = Hub::open(dir.path().to_path_buf()).unwrap();
+                assert!(hub.recovery_reason().is_none(), "{damage}");
+                assert_eq!(hub.load().unwrap(), Some(canonical.clone()));
+                let current: String = meta
+                    .query_row("SELECT data FROM session_snapshot WHERE id = 1", [], |r| {
+                        r.get(0)
+                    })
+                    .unwrap();
+                assert_eq!(current, original);
+            }
+            let mut hub = Hub::open(dir.path().to_path_buf()).unwrap();
+            hub.save(&canonical).unwrap();
+            let kept: Vec<u8> = meta
+                .query_row(
+                    "SELECT data FROM session_snapshot_backup WHERE id = 1",
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(kept, original.as_bytes());
+            hub.save(&saved_qa_session()).unwrap();
+            let kept_again: Vec<u8> = meta
+                .query_row(
+                    "SELECT data FROM session_snapshot_backup WHERE id = 1",
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(kept_again, kept);
+            drop(hub);
+            assert!(Hub::open(dir.path().to_path_buf())
+                .unwrap()
+                .recovery_reason()
+                .is_none());
+        }
+    }
 
+    #[test]
+    fn compatibility_backup_and_replacement_commit_or_roll_back_together() {
+        let (dir, mut state) = marked_directory(REASON);
+        state.active_item = Some(ItemId::from(999_999));
+        let original = serde_json::to_string_pretty(&state).unwrap();
+        let meta = Connection::open(dir.path().join("meta.sqlite")).unwrap();
+        meta.execute("UPDATE session_snapshot SET data = ?1", [&original])
+            .unwrap();
+        meta.execute(
+            "UPDATE session_recovery SET data = ?1",
+            [original.as_bytes()],
+        )
+        .unwrap();
         let mut hub = Hub::open(dir.path().to_path_buf()).unwrap();
+        assert!(
+            hub.recovery_reason().is_none(),
+            "obsolete semantic repair locks lift"
+        );
+        let canonical = hub.load().unwrap().unwrap();
+        meta.execute_batch("CREATE TRIGGER fail_snapshot BEFORE UPDATE ON session_snapshot BEGIN SELECT RAISE(ABORT, 'fixture write failure'); END;").unwrap();
+        assert!(hub.save(&canonical).is_err());
+        let backups: i64 = meta
+            .query_row("SELECT count(*) FROM session_snapshot_backup", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        let current: String = meta
+            .query_row("SELECT data FROM session_snapshot WHERE id = 1", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(backups, 0);
+        assert_eq!(current, original);
+        meta.execute_batch("DROP TRIGGER fail_snapshot").unwrap();
+        hub.save(&canonical).unwrap();
+        let kept: Vec<u8> = meta
+            .query_row(
+                "SELECT data FROM session_snapshot_backup WHERE id = 1",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(kept, original.as_bytes());
+    }
+
+    #[test]
+    fn explicit_deletion_disposes_only_a_backup_that_names_its_profile() {
+        for contains_deleted in [true, false] {
+            let dir = tempfile::tempdir().unwrap();
+            let mut state = saved_qa_session();
+            Hub::open(dir.path().to_path_buf())
+                .unwrap()
+                .save(&state)
+                .unwrap();
+            state.active_item = Some(ItemId::from(999_999));
+            let original = serde_json::to_string_pretty(&state).unwrap();
+            let meta = Connection::open(dir.path().join("meta.sqlite")).unwrap();
+            meta.execute("UPDATE session_snapshot SET data = ?1", [&original])
+                .unwrap();
+            let mut hub = Hub::open(dir.path().to_path_buf()).unwrap();
+            let mut canonical = hub.load().unwrap().unwrap();
+            hub.save(&canonical).unwrap();
+            let deleted = if contains_deleted {
+                state.profiles[0].id
+            } else {
+                let id = ProfileId::from(705);
+                canonical.profiles.push(PersistedProfile {
+                    id,
+                    name: "Other".into(),
+                    kind: ProfileKind::Named,
+                });
+                hub.save(&canonical).unwrap();
+                id
+            };
+            let filtered = if contains_deleted {
+                SessionState::default()
+            } else {
+                core_session::canonicalize(saved_qa_session())
+            };
+            assert_eq!(
+                hub.authorize_profile_deletion(deleted, &filtered).unwrap(),
+                zephium_core::ports::store::ProfileDeletionAuthorizeOutcome::Authorized
+            );
+            hub.fail_next_profile_deletion_after_local_purge();
+            assert!(hub.finalize_profile_deletion(deleted).is_err());
+            let kept: Vec<u8> = meta
+                .query_row(
+                    "SELECT data FROM session_snapshot_backup WHERE id = 1",
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(kept, original.as_bytes());
+            assert!(String::from_utf8(kept)
+                .unwrap()
+                .contains("https://example.test/"));
+            assert!(!hub.pending_profile_deletions().unwrap().is_empty());
+            if contains_deleted {
+                // A final journal failure retains its obligation after backup disposal.
+                meta.execute_batch("CREATE TRIGGER fail_delete BEFORE DELETE ON profile_deletion_journal BEGIN SELECT RAISE(ABORT, 'fixture'); END;
+                    CREATE TRIGGER fail_update BEFORE UPDATE ON profile_deletion_journal BEGIN SELECT RAISE(ABORT, 'fixture'); END;").unwrap();
+                assert!(hub.finalize_profile_deletion(deleted).is_err());
+                let kept: Option<Vec<u8>> = meta
+                    .query_row(
+                        "SELECT data FROM session_snapshot_backup WHERE id = 1",
+                        [],
+                        |r| r.get(0),
+                    )
+                    .optional()
+                    .unwrap();
+                assert_eq!(kept, None);
+                assert!(!hub.pending_profile_deletions().unwrap().is_empty());
+                meta.execute_batch("DROP TRIGGER fail_delete; DROP TRIGGER fail_update;")
+                    .unwrap();
+            }
+            assert!(hub.finalize_profile_deletion(deleted).unwrap());
+            let kept: Option<Vec<u8>> = meta
+                .query_row(
+                    "SELECT data FROM session_snapshot_backup WHERE id = 1",
+                    [],
+                    |r| r.get(0),
+                )
+                .optional()
+                .unwrap();
+            assert_eq!(
+                kept,
+                (!contains_deleted).then(|| original.as_bytes().to_vec())
+            );
+            assert!(hub.pending_profile_deletions().unwrap().is_empty());
+        }
+    }
+
+    #[test]
+    fn unreadable_backup_is_discarded_to_complete_explicit_deletion() {
+        for damage in ["corrupt", "utf8", "newer", "unknown-field", "oversized"] {
+            let mut hub = Hub::in_memory().unwrap();
+            let state = saved_qa_session();
+            hub.save(&state).unwrap();
+            hub.meta
+                .execute(
+                    "INSERT INTO session_snapshot_backup VALUES (1, 1, ?1, ?2)",
+                    params![SESSION_SCHEMA_VERSION, serde_json::to_vec(&state).unwrap()],
+                )
+                .unwrap();
+            match damage {
+                "corrupt" => {
+                    hub.meta
+                        .execute(
+                            "UPDATE session_snapshot_backup SET data = ?1",
+                            [b"{broken".as_slice()],
+                        )
+                        .unwrap();
+                }
+                "utf8" => {
+                    hub.meta
+                        .execute(
+                            "UPDATE session_snapshot_backup SET data = ?1",
+                            [b"\xff".as_slice()],
+                        )
+                        .unwrap();
+                }
+                "newer" => {
+                    hub.meta
+                        .execute(
+                            "UPDATE session_snapshot_backup SET schema_version = ?1",
+                            [SESSION_SCHEMA_VERSION + 1],
+                        )
+                        .unwrap();
+                }
+                "unknown-field" => {
+                    let mut data = serde_json::to_value(&state).unwrap();
+                    data["future"] = serde_json::json!(true);
+                    hub.meta
+                        .execute(
+                            "UPDATE session_snapshot_backup SET data = ?1",
+                            [serde_json::to_vec(&data).unwrap()],
+                        )
+                        .unwrap();
+                }
+                "oversized" => {
+                    hub.meta
+                        .execute(
+                            "UPDATE session_snapshot_backup SET data = zeroblob(?1)",
+                            [MAX_SESSION_SNAPSHOT_BYTES as i64 + 1],
+                        )
+                        .unwrap();
+                }
+                _ => unreachable!(),
+            }
+            let profile = state.profiles[0].id;
+            hub.authorize_profile_deletion(profile, &SessionState::default())
+                .unwrap();
+            assert!(hub.finalize_profile_deletion(profile).unwrap(), "{damage}");
+            assert_eq!(
+                hub.pending_profile_deletions().unwrap().len(),
+                0,
+                "{damage}"
+            );
+            let kept: i64 = hub
+                .meta
+                .query_row("SELECT count(*) FROM session_snapshot_backup", [], |r| {
+                    r.get(0)
+                })
+                .unwrap();
+            assert_eq!(kept, 0, "{damage}");
+        }
+    }
+
+    #[test]
+    fn backup_checkpoint_never_waits_and_restores_the_write_timeout_on_every_result() {
+        let dir = tempfile::tempdir().unwrap();
+        let meta = Connection::open(dir.path().join("checkpoint.sqlite")).unwrap();
+        configure(&meta).unwrap();
+        meta.execute_batch("CREATE TABLE fixture(data); INSERT INTO fixture VALUES ('before');")
+            .unwrap();
+        meta.busy_timeout(std::time::Duration::from_millis(5432))
+            .unwrap();
+        checkpoint_session_backup(&meta).unwrap();
+        let timeout = || {
+            meta.query_row("PRAGMA busy_timeout", [], |row| row.get::<_, u64>(0))
+                .unwrap()
+        };
+        assert_eq!(timeout(), 5432);
+        let reader = Connection::open(dir.path().join("checkpoint.sqlite")).unwrap();
+        reader
+            .execute_batch("BEGIN; SELECT * FROM fixture;")
+            .unwrap();
+        meta.execute_batch("UPDATE fixture SET data = 'after';")
+            .unwrap();
+        let started = std::time::Instant::now();
+        assert!(checkpoint_session_backup(&meta).is_err());
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(2),
+            "a pinned reader must defer instead of spending the write timeout"
+        );
+        assert_eq!(timeout(), 5432);
+        reader.execute_batch("ROLLBACK").unwrap();
+        checkpoint_session_backup(&meta).unwrap();
+        assert_eq!(timeout(), 5432);
+        // SQLite returns an actual query error when this connection itself
+        // holds a write transaction. Restore the timeout on that path too.
+        meta.execute_batch("BEGIN IMMEDIATE; UPDATE fixture SET data = 'transaction';")
+            .unwrap();
+        assert!(matches!(
+            checkpoint_session_backup(&meta),
+            Err(rusqlite::Error::SqliteFailure(..))
+        ));
+        assert_eq!(timeout(), 5432);
+        meta.execute_batch("ROLLBACK").unwrap();
+    }
+
+    #[test]
+    fn busy_backup_checkpoint_at_restart_reopens_local_deletion_without_blocking_session_load() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = saved_qa_session();
+        let profile = state.profiles[0].id;
+        let mut hub = Hub::open(dir.path().to_path_buf()).unwrap();
+        hub.save(&state).unwrap();
+        hub.authorize_profile_deletion(profile, &SessionState::default())
+            .unwrap();
+        assert!(hub
+            .finalize_profile_deletion_requiring_restart_confirmation(profile)
+            .unwrap());
+        assert_eq!(
+            hub.completed_profile_deletion_tombstones().unwrap(),
+            vec![profile]
+        );
+        // A reader can pin frames written after local unlink was confirmed,
+        // including a malformed recovery copy requiring conservative disposal.
+        hub.meta
+            .execute(
+                "INSERT INTO session_snapshot_backup VALUES (1, ?1, ?2, ?3)",
+                params![
+                    now_secs(),
+                    SESSION_SCHEMA_VERSION,
+                    b"private restart bytes".as_slice()
+                ],
+            )
+            .unwrap();
+        let reader = Connection::open(dir.path().join("meta.sqlite")).unwrap();
+        reader
+            .execute_batch("BEGIN; SELECT * FROM session_snapshot_backup;")
+            .unwrap();
+        let mut reopened = Hub::open_for_new_process(dir.path().to_path_buf()).unwrap();
+        assert_eq!(reopened.load().unwrap(), Some(SessionState::default()));
+        let pending = reopened.pending_profile_deletions().unwrap();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].profile, profile);
+        assert!(pending[0].native_erasure_verified);
+        assert!(reopened
+            .completed_profile_deletion_tombstones()
+            .unwrap()
+            .is_empty());
+        reopened
+            .meta
+            .busy_timeout(std::time::Duration::ZERO)
+            .unwrap();
+        assert!(reopened.finalize_profile_deletion(profile).is_err());
+        assert_eq!(reopened.pending_profile_deletions().unwrap().len(), 1);
+        reader.execute_batch("ROLLBACK").unwrap();
+        assert!(reopened.finalize_profile_deletion(profile).unwrap());
+        assert!(reopened.pending_profile_deletions().unwrap().is_empty());
+    }
+
+    #[test]
+    fn busy_backup_checkpoint_keeps_deletion_pending_after_row_disposal_until_retry() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut hub = Hub::open(dir.path().to_path_buf()).unwrap();
+        let state = saved_qa_session();
+        let profile = state.profiles[0].id;
+        hub.save(&state).unwrap();
+        hub.meta.busy_timeout(std::time::Duration::ZERO).unwrap();
+        hub.meta
+            .execute(
+                "INSERT INTO session_snapshot_backup VALUES (1, ?1, ?2, ?3)",
+                params![
+                    now_secs(),
+                    SESSION_SCHEMA_VERSION,
+                    b"private erased bytes".as_slice()
+                ],
+            )
+            .unwrap();
+        hub.authorize_profile_deletion(profile, &SessionState::default())
+            .unwrap();
+        let reader = Connection::open(dir.path().join("meta.sqlite")).unwrap();
+        reader
+            .execute_batch("BEGIN; SELECT * FROM session_snapshot_backup;")
+            .unwrap();
+        assert!(hub.finalize_profile_deletion(profile).is_err());
+        assert_eq!(hub.pending_profile_deletions().unwrap().len(), 1);
+        assert_eq!(
+            hub.meta
+                .query_row("SELECT count(*) FROM session_snapshot_backup", [], |r| r
+                    .get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+        // Already-deleted backup must still checkpoint on every retry.
+        assert!(hub.finalize_profile_deletion(profile).is_err());
+        assert_eq!(hub.pending_profile_deletions().unwrap().len(), 1);
+        reader.execute_batch("ROLLBACK").unwrap();
+        assert!(hub.finalize_profile_deletion(profile).unwrap());
+        assert!(hub.pending_profile_deletions().unwrap().is_empty());
+        let wal = std::fs::read(dir.path().join("meta.sqlite-wal")).unwrap();
+        assert!(!wal
+            .windows(b"private erased bytes".len())
+            .any(|bytes| bytes == b"private erased bytes"));
+    }
+
+    #[test]
+    fn failed_backup_disposal_keeps_deletion_pending_until_retry() {
+        let mut hub = Hub::in_memory().unwrap();
+        let state = saved_qa_session();
+        let profile = state.profiles[0].id;
+        hub.save(&state).unwrap();
+        hub.meta
+            .execute(
+                "INSERT INTO session_snapshot_backup VALUES (1, ?1, ?2, ?3)",
+                params![now_secs(), SESSION_SCHEMA_VERSION, b"{broken".as_slice()],
+            )
+            .unwrap();
+        hub.authorize_profile_deletion(profile, &SessionState::default())
+            .unwrap();
+        hub.meta.execute_batch("CREATE TRIGGER fail_backup_delete BEFORE DELETE ON session_snapshot_backup BEGIN SELECT RAISE(ABORT, 'fixture write failure'); END;").unwrap();
+        assert!(hub.finalize_profile_deletion(profile).is_err());
+        assert_eq!(hub.pending_profile_deletions().unwrap().len(), 1);
+        hub.meta
+            .execute_batch("DROP TRIGGER fail_backup_delete")
+            .unwrap();
+        assert!(hub.finalize_profile_deletion(profile).unwrap());
+        assert!(hub.pending_profile_deletions().unwrap().is_empty());
+    }
+
+    #[test]
+    fn clearing_history_discards_its_backup_even_for_a_recent_range() {
+        for since in [None, Some(now_secs())] {
+            let mut hub = Hub::in_memory().unwrap();
+            let state = saved_qa_session();
+            hub.save(&state).unwrap();
+            hub.meta
+                .execute(
+                    "INSERT INTO session_snapshot_backup VALUES (1, ?1, ?2, ?3)",
+                    params![
+                        now_secs(),
+                        SESSION_SCHEMA_VERSION,
+                        serde_json::to_vec(&state).unwrap()
+                    ],
+                )
+                .unwrap();
+            assert_eq!(
+                hub.clear_history_checked(state.profiles[0].id, since),
+                Some(0)
+            );
+            let backups: i64 = hub
+                .meta
+                .query_row("SELECT count(*) FROM session_snapshot_backup", [], |r| {
+                    r.get(0)
+                })
+                .unwrap();
+            assert_eq!(backups, 0);
+        }
+    }
+
+    #[test]
+    fn old_or_invalid_backup_times_expire_at_open_without_refreshing_fresh_rows() {
+        let now = now_secs();
+        for (saved_at, retained) in [
+            (now - 30 * 24 * 3600, false),
+            (1, false),
+            (0, false),
+            (-1, false),
+            (i64::MAX, false),
+            (now + 3600, false),
+            (now - 24 * 3600, true),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let state = saved_qa_session();
+            Hub::open(dir.path().to_path_buf())
+                .unwrap()
+                .save(&state)
+                .unwrap();
+            let meta = Connection::open(dir.path().join("meta.sqlite")).unwrap();
+            let bytes = serde_json::to_vec(&state).unwrap();
+            meta.execute(
+                "INSERT INTO session_snapshot_backup VALUES (1, ?1, ?2, ?3)",
+                params![saved_at, SESSION_SCHEMA_VERSION, &bytes],
+            )
+            .unwrap();
+            for _ in 0..2 {
+                let _hub = Hub::open(dir.path().to_path_buf()).unwrap();
+                let backup: Option<(i64, Vec<u8>)> = meta
+                    .query_row(
+                        "SELECT saved_at, data FROM session_snapshot_backup",
+                        [],
+                        |r| Ok((r.get(0)?, r.get(1)?)),
+                    )
+                    .optional()
+                    .unwrap();
+                assert_eq!(
+                    backup,
+                    retained.then(|| (saved_at, bytes.clone())),
+                    "saved_at={saved_at}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn privacy_clear_retires_pending_source_before_load_reopen_or_later_save() {
+        for history in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let mut state = saved_qa_session();
+            Hub::open(dir.path().to_path_buf())
+                .unwrap()
+                .save(&state)
+                .unwrap();
+            state.active_item = Some(ItemId::from(999_999));
+            let meta = Connection::open(dir.path().join("meta.sqlite")).unwrap();
+            meta.execute(
+                "UPDATE session_snapshot SET data = ?1",
+                [serde_json::to_string_pretty(&state).unwrap()],
+            )
+            .unwrap();
+            let mut hub = Hub::open(dir.path().to_path_buf()).unwrap();
+            assert!(hub.pending_session_backup.is_some());
+            let profile = state.profiles[0].id;
+            if history {
+                assert_eq!(hub.clear_history_checked(profile, None), Some(0));
+            } else {
+                hub.discard_session_backup(profile).unwrap();
+            }
+            assert!(hub.pending_session_backup.is_none());
+            let canonical = hub.load().unwrap().unwrap();
+            assert!(hub.pending_session_backup.is_none());
+            hub.save(&canonical).unwrap();
+            drop(hub);
+            let mut hub = Hub::open(dir.path().to_path_buf()).unwrap();
+            let loaded = hub.load().unwrap().unwrap();
+            assert_eq!(loaded, canonical);
+            hub.save(&loaded).unwrap();
+            assert!(hub.pending_session_backup.is_none());
+            let backups: i64 = meta
+                .query_row("SELECT count(*) FROM session_snapshot_backup", [], |r| {
+                    r.get(0)
+                })
+                .unwrap();
+            assert_eq!(backups, 0);
+        }
+    }
+
+    #[test]
+    fn privacy_clear_preserves_unrelated_backups_and_rejects_unknown_profiles() {
+        let mut hub = Hub::in_memory().unwrap();
+        let backup = saved_qa_session();
+        let mut state = backup.clone();
+        let other = ProfileId::from(705);
+        state.profiles.push(PersistedProfile {
+            id: other,
+            name: "Other".into(),
+            kind: ProfileKind::Named,
+        });
+        hub.save(&core_session::canonicalize(state)).unwrap();
+        let bytes = serde_json::to_vec(&backup).unwrap();
+        hub.meta
+            .execute(
+                "INSERT INTO session_snapshot_backup VALUES (1, ?1, ?2, ?3)",
+                params![now_secs(), SESSION_SCHEMA_VERSION, &bytes],
+            )
+            .unwrap();
+        assert!(hub.discard_session_backup(ProfileId::from(999)).is_err());
+        hub.discard_session_backup(other).unwrap();
+        let kept: Vec<u8> = hub
+            .meta
+            .query_row("SELECT data FROM session_snapshot_backup", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(kept, bytes);
+        hub.discard_session_backup(backup.profiles[0].id).unwrap();
+        assert_eq!(
+            hub.meta
+                .query_row("SELECT count(*) FROM session_snapshot_backup", [], |r| r
+                    .get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+    }
+
+    #[test]
+    fn history_clear_checkpoints_only_disposed_session_bytes_and_retains_failed_cleanup() {
+        for unrelated_backup in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let mut hub = Hub::open(dir.path().to_path_buf()).unwrap();
+            let backup = saved_qa_session();
+            let profile = ProfileId::from(705);
+            let mut state = backup.clone();
+            state.profiles.push(PersistedProfile {
+                id: profile,
+                name: "Other".into(),
+                kind: ProfileKind::Named,
+            });
+            hub.save(&core_session::canonicalize(state)).unwrap();
+            if unrelated_backup {
+                hub.meta
+                    .execute(
+                        "INSERT INTO session_snapshot_backup VALUES (1, ?1, ?2, ?3)",
+                        params![
+                            now_secs(),
+                            SESSION_SCHEMA_VERSION,
+                            serde_json::to_vec(&backup).unwrap()
+                        ],
+                    )
+                    .unwrap();
+            }
+            let reader = Connection::open(dir.path().join("meta.sqlite")).unwrap();
+            reader
+                .execute_batch("BEGIN; SELECT * FROM session_snapshot")
+                .unwrap();
+            hub.meta
+                .execute_batch("CREATE TABLE checkpoint_fixture(value INTEGER)")
+                .unwrap();
+            assert_eq!(hub.clear_history_checked(profile, None), Some(0));
+            assert_eq!(
+                hub.meta
+                    .query_row("SELECT count(*) FROM session_snapshot_backup", [], |row| {
+                        row.get::<_, i64>(0)
+                    })
+                    .unwrap(),
+                i64::from(unrelated_backup)
+            );
+
+            let saved = serde_json::to_vec(&hub.load().unwrap().unwrap()).unwrap();
+            hub.meta
+                .execute(
+                    "INSERT OR REPLACE INTO session_snapshot_backup VALUES (1, ?1, ?2, ?3)",
+                    params![now_secs(), SESSION_SCHEMA_VERSION, saved],
+                )
+                .unwrap();
+            assert_eq!(hub.clear_history_checked(profile, None), None);
+            assert_eq!(
+                hub.meta
+                    .query_row("SELECT count(*) FROM session_snapshot_backup", [], |row| {
+                        row.get::<_, i64>(0)
+                    })
+                    .unwrap(),
+                0
+            );
+            assert_eq!(hub.clear_history_checked(profile, None), None);
+            reader.execute_batch("ROLLBACK").unwrap();
+            assert_eq!(hub.clear_history_checked(profile, None), Some(0));
+            reader
+                .execute_batch("BEGIN; SELECT * FROM session_snapshot")
+                .unwrap();
+            hub.meta
+                .execute_batch("INSERT INTO checkpoint_fixture VALUES (1)")
+                .unwrap();
+            assert_eq!(hub.clear_history_checked(profile, None), Some(0));
+            reader.execute_batch("ROLLBACK").unwrap();
+        }
+    }
+
+    #[test]
+    fn canonical_source_repair_retains_checkpoint_debt_without_a_backup_row() {
+        let (dir, mut state) = marked_directory(REASON);
+        state.active_item = Some(ItemId::from(999_999));
+        let source = serde_json::to_string_pretty(&state).unwrap();
+        let reader = Connection::open(dir.path().join("meta.sqlite")).unwrap();
+        reader
+            .execute("UPDATE session_snapshot SET data = ?1", [&source])
+            .unwrap();
+        reader
+            .execute("UPDATE session_recovery SET data = ?1", [source.as_bytes()])
+            .unwrap();
+        let mut hub = Hub::open(dir.path().to_path_buf()).unwrap();
+        assert!(hub.pending_session_backup.is_some());
+        reader
+            .execute_batch("BEGIN; SELECT * FROM session_snapshot")
+            .unwrap();
+        assert!(hub.discard_session_backup(state.profiles[0].id).is_err());
+        assert!(hub.pending_session_backup.is_none());
+        assert!(hub.discard_session_backup(state.profiles[0].id).is_err());
+        reader.execute_batch("ROLLBACK").unwrap();
+        hub.discard_session_backup(state.profiles[0].id).unwrap();
+    }
+
+    #[test]
+    fn privacy_clear_reports_sql_failure_and_rolls_back_pending_source_repair() {
+        let (dir, mut state) = marked_directory(REASON);
+        state.active_item = Some(ItemId::from(999_999));
+        let original = serde_json::to_string_pretty(&state).unwrap();
+        let meta = Connection::open(dir.path().join("meta.sqlite")).unwrap();
+        meta.execute("UPDATE session_snapshot SET data = ?1", [&original])
+            .unwrap();
+        meta.execute(
+            "UPDATE session_recovery SET data = ?1",
+            [original.as_bytes()],
+        )
+        .unwrap();
+        let mut hub = Hub::open(dir.path().to_path_buf()).unwrap();
+        let profile = state.profiles[0].id;
+        let bytes = serde_json::to_vec(&state).unwrap();
+        meta.execute(
+            "INSERT INTO session_snapshot_backup VALUES (1, ?1, ?2, ?3)",
+            params![now_secs(), SESSION_SCHEMA_VERSION, &bytes],
+        )
+        .unwrap();
+        for failure in [
+            "DELETE ON session_snapshot_backup",
+            "UPDATE ON session_snapshot",
+        ] {
+            meta.execute_batch(&format!("CREATE TRIGGER fail_privacy BEFORE {failure} BEGIN SELECT RAISE(ABORT, 'fixture write failure'); END;")).unwrap();
+            assert!(hub.discard_session_backup(profile).is_err());
+            assert_eq!(hub.clear_history_checked(profile, None), None);
+            assert!(hub.pending_session_backup.is_some());
+            assert_eq!(
+                meta.query_row("SELECT data FROM session_snapshot", [], |r| r
+                    .get::<_, String>(0))
+                    .unwrap(),
+                original
+            );
+            assert_eq!(
+                meta.query_row("SELECT data FROM session_snapshot_backup", [], |r| r
+                    .get::<_, Vec<u8>>(0))
+                    .unwrap(),
+                bytes
+            );
+            meta.execute_batch("DROP TRIGGER fail_privacy").unwrap();
+        }
+        hub.discard_session_backup(profile).unwrap();
+        assert!(hub.pending_session_backup.is_none());
+    }
+
+    #[test]
+    fn backup_deadline_bounds_clock_rollback_and_failed_expiry_retries_without_spinning() {
+        let mut hub = Hub::in_memory().unwrap();
+        let bytes = serde_json::to_vec(&saved_qa_session()).unwrap();
+        hub.meta
+            .execute(
+                "INSERT INTO session_snapshot_backup VALUES (1, ?1, ?2, ?3)",
+                params![now_secs(), SESSION_SCHEMA_VERSION, &bytes],
+            )
+            .unwrap();
+        hub.arm_session_backup_expiry().unwrap();
+        let initial = hub.session_backup_deadline().unwrap();
+        assert!(initial > std::time::Instant::now());
+        hub.prune_expired_session_backup().unwrap();
+        assert_eq!(hub.session_backup_deadline(), Some(initial));
+        hub.session_backup_expiry.as_mut().unwrap().expires_at = std::time::Instant::now();
+        hub.meta.execute_batch("CREATE TRIGGER fail_expiry BEFORE DELETE ON session_snapshot_backup BEGIN SELECT RAISE(ABORT, 'fixture write failure'); END;").unwrap();
+        assert!(hub.prune_expired_session_backup().is_err());
+        assert!(hub.session_backup_deadline().unwrap() > std::time::Instant::now());
+        assert!(hub.prune_expired_session_backup().is_ok());
+        hub.meta.execute_batch("DROP TRIGGER fail_expiry").unwrap();
+        hub.session_backup_expiry.as_mut().unwrap().retry_at = None;
+        hub.prune_expired_session_backup().unwrap();
+        assert!(hub.session_backup_deadline().is_none());
+        assert_eq!(
+            hub.meta
+                .query_row("SELECT count(*) FROM session_snapshot_backup", [], |r| r
+                    .get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+    }
+
+    #[test]
+    fn unreadable_backup_query_still_attempts_erasure_and_reports_write_failure() {
+        unsafe extern "C" fn deny_backup_data_read(
+            _context: *mut std::ffi::c_void,
+            action: std::ffi::c_int,
+            table: *const std::ffi::c_char,
+            column: *const std::ffi::c_char,
+            _database: *const std::ffi::c_char,
+            _trigger: *const std::ffi::c_char,
+        ) -> std::ffi::c_int {
+            if action == rusqlite::ffi::SQLITE_READ
+                && !table.is_null()
+                && !column.is_null()
+                && unsafe { std::ffi::CStr::from_ptr(table).to_bytes() }
+                    == b"session_snapshot_backup"
+                && unsafe { std::ffi::CStr::from_ptr(column).to_bytes() } == b"data"
+            {
+                rusqlite::ffi::SQLITE_DENY
+            } else {
+                rusqlite::ffi::SQLITE_OK
+            }
+        }
+        let mut hub = Hub::in_memory().unwrap();
+        let state = saved_qa_session();
+        let profile = state.profiles[0].id;
+        hub.save(&state).unwrap();
+        hub.meta
+            .execute(
+                "INSERT INTO session_snapshot_backup VALUES (1, ?1, ?2, ?3)",
+                params![
+                    now_secs(),
+                    SESSION_SCHEMA_VERSION,
+                    serde_json::to_vec(&state).unwrap()
+                ],
+            )
+            .unwrap();
+        hub.authorize_profile_deletion(profile, &SessionState::default())
+            .unwrap();
+        hub.meta.execute_batch("CREATE TRIGGER fail_backup_delete BEFORE DELETE ON session_snapshot_backup BEGIN SELECT RAISE(ABORT, 'fixture write failure'); END;").unwrap();
+        unsafe {
+            rusqlite::ffi::sqlite3_set_authorizer(
+                hub.meta.handle(),
+                Some(deny_backup_data_read),
+                std::ptr::null_mut(),
+            );
+        }
+        let failed = hub.finalize_profile_deletion(profile);
+        unsafe {
+            rusqlite::ffi::sqlite3_set_authorizer(hub.meta.handle(), None, std::ptr::null_mut());
+        }
+        assert!(failed
+            .unwrap_err()
+            .to_string()
+            .contains("fixture write failure"));
+        assert_eq!(hub.pending_profile_deletions().unwrap().len(), 1);
+        hub.meta
+            .execute_batch("DROP TRIGGER fail_backup_delete")
+            .unwrap();
+        unsafe {
+            rusqlite::ffi::sqlite3_set_authorizer(
+                hub.meta.handle(),
+                Some(deny_backup_data_read),
+                std::ptr::null_mut(),
+            );
+        }
+        let completed = hub.finalize_profile_deletion(profile);
+        unsafe {
+            rusqlite::ffi::sqlite3_set_authorizer(hub.meta.handle(), None, std::ptr::null_mut());
+        }
+        assert!(completed.unwrap());
+        assert!(hub.pending_profile_deletions().unwrap().is_empty());
+        assert_eq!(
+            hub.meta
+                .query_row("SELECT count(*) FROM session_snapshot_backup", [], |r| r
+                    .get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+    }
+
+    #[test]
+    fn expiry_write_failure_at_open_preserves_session_availability_and_retries() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = saved_qa_session();
+        Hub::open(dir.path().to_path_buf())
+            .unwrap()
+            .save(&state)
+            .unwrap();
+        let meta = Connection::open(dir.path().join("meta.sqlite")).unwrap();
+        meta.execute(
+            "INSERT INTO session_snapshot_backup VALUES (1, 1, ?1, ?2)",
+            params![SESSION_SCHEMA_VERSION, serde_json::to_vec(&state).unwrap()],
+        )
+        .unwrap();
+        meta.execute_batch("BEGIN IMMEDIATE").unwrap();
+        let mut hub = Hub::open(dir.path().to_path_buf()).unwrap();
+        assert_eq!(hub.load().unwrap(), Some(state));
         assert!(hub.recovery_reason().is_none());
-        let loaded = hub.load().unwrap().expect("the session is restored");
-        assert_eq!(loaded, core_session::canonicalize(state));
-        assert_ne!(loaded.active_item, Some(ItemId::from(999_999)));
+        assert!(hub.session_backup_deadline().unwrap() > std::time::Instant::now());
+        meta.execute_batch("ROLLBACK").unwrap();
+        hub.session_backup_expiry.as_mut().unwrap().retry_at = None;
+        hub.prune_expired_session_backup().unwrap();
+        assert!(hub.session_backup_deadline().is_none());
+        assert_eq!(
+            meta.query_row("SELECT count(*) FROM session_snapshot_backup", [], |r| r
+                .get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+    }
+
+    #[test]
+    fn forgetting_history_discards_recovery_backup() {
+        let mut hub = Hub::in_memory().unwrap();
+        let state = saved_qa_session();
+        let profile = state.profiles[0].id;
+        let url = "https://example.test/";
+        hub.save(&state).unwrap();
+        hub.record_visit(profile, url, "Example");
+        hub.meta
+            .execute(
+                "INSERT INTO session_snapshot_backup VALUES (1, ?1, ?2, ?3)",
+                params![
+                    now_secs(),
+                    SESSION_SCHEMA_VERSION,
+                    serde_json::to_vec(&state).unwrap()
+                ],
+            )
+            .unwrap();
+        assert_eq!(hub.forget_history_urls(profile, &[url.into()]), 1);
+        assert_eq!(
+            hub.meta
+                .query_row("SELECT count(*) FROM session_snapshot_backup", [], |r| r
+                    .get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+    }
+
+    #[test]
+    fn checked_history_forget_reports_backup_and_history_sql_failures() {
+        let mut hub = Hub::in_memory().unwrap();
+        let state = saved_qa_session();
+        let profile = state.profiles[0].id;
+        let urls = vec!["https://example.test/".to_owned()];
+        hub.save(&state).unwrap();
+        hub.record_visit(profile, &urls[0], "Example");
+        hub.meta
+            .execute(
+                "INSERT INTO session_snapshot_backup VALUES (1, ?1, ?2, ?3)",
+                params![
+                    now_secs(),
+                    SESSION_SCHEMA_VERSION,
+                    serde_json::to_vec(&state).unwrap()
+                ],
+            )
+            .unwrap();
+        assert_eq!(
+            hub.forget_history_urls_checked(ProfileId::from(999), &urls),
+            None
+        );
+        hub.meta.execute_batch("CREATE TRIGGER fail_backup_delete BEFORE DELETE ON session_snapshot_backup BEGIN SELECT RAISE(ABORT, 'fixture write failure'); END;").unwrap();
+        assert_eq!(hub.forget_history_urls_checked(profile, &urls), None);
+        hub.meta
+            .execute_batch("DROP TRIGGER fail_backup_delete")
+            .unwrap();
+        hub.profile_conn(profile).unwrap().execute_batch("CREATE TRIGGER fail_history_delete BEFORE DELETE ON history BEGIN SELECT RAISE(ABORT, 'fixture write failure'); END;").unwrap();
+        assert_eq!(hub.forget_history_urls_checked(profile, &urls), None);
+        assert_eq!(hub.history_page(profile, "", None, None, 10).len(), 1);
+        hub.profile_conn(profile)
+            .unwrap()
+            .execute_batch("DROP TRIGGER fail_history_delete")
+            .unwrap();
+        assert_eq!(hub.forget_history_urls_checked(profile, &urls), Some(1));
+        assert_eq!(hub.forget_history_urls_checked(profile, &urls), Some(0));
     }
 
     #[test]
@@ -724,6 +1840,15 @@ impl Hub {
         } = prepared;
         let tx = self.meta.transaction()?;
         Self::validate_blocker_cohort_before_session_commit(&tx, &self.registry)?;
+        let backup_saved_at = now_secs();
+        let mut inserted_backup = false;
+        if let Some(source) = &self.pending_session_backup {
+            inserted_backup = tx.execute(
+                "INSERT INTO session_snapshot_backup(id, saved_at, schema_version, data)
+                 VALUES (1, ?1, ?2, ?3) ON CONFLICT(id) DO NOTHING",
+                params![backup_saved_at, SESSION_SCHEMA_VERSION, source],
+            )? == 1;
+        }
         if let Some(profile) = authorize_deletion {
             // Establish the deletion anchor before removing the active-profile
             // anchor. The surrounding transaction keeps the temporary overlap
@@ -787,6 +1912,15 @@ impl Hub {
             params![SESSION_SCHEMA_VERSION, snapshot],
         )?;
         tx.commit()?;
+        self.pending_session_backup = None;
+        if inserted_backup {
+            self.session_backup_expiry = Some(SessionBackupExpiry {
+                saved_at: backup_saved_at,
+                expires_at: std::time::Instant::now()
+                    + std::time::Duration::from_secs(SESSION_BACKUP_LIFETIME_SECS as u64),
+                retry_at: None,
+            });
+        }
         self.committed_session = Some(snapshot);
         #[cfg(test)]
         if authorize_deletion.is_some()
@@ -882,13 +2016,11 @@ impl Hub {
                     "authoritative snapshot does not match profile registry",
                 ));
             }
-            // Canonical form is the sanitizer, and its rules tighten between
-            // releases. A session saved by an earlier build that decodes and
-            // matches the registry is restored in today's canonical form;
-            // locking the store over it would cost the person every tab.
             let canonical = core_session::canonicalize(state.clone());
             if canonical != state {
-                eprintln!("store: restoring a session saved under older canonical rules");
+                // Restore compatibility repairs immediately, but retain their
+                // exact source until the replacing transaction backs it up.
+                self.pending_session_backup = Some(data.into_bytes());
             }
             return Ok(Some(canonical));
         }
@@ -1022,11 +2154,8 @@ impl Hub {
         self.recovery_required.as_deref()
     }
 
-    /// Earlier builds put a valid session that was not in the then-exact
-    /// canonical form (an older QA build's Settings tab, or rules that
-    /// tightened later) into read-only recovery. Clear that specific marker
-    /// when its preserved bytes still equal the current bounded snapshot;
-    /// loading restores the canonical form and the next save publishes it.
+    /// Earlier builds quarantined snapshots that compatibility restore can
+    /// repair. Lift only this obsolete marker for the exact validated source.
     pub(super) fn recover_canonical_form_quarantine(&mut self) -> rusqlite::Result<bool> {
         const REASON: &str = "authoritative session is not in exact canonical form";
         if self.recovery_required.as_deref() != Some(REASON) {
@@ -1072,9 +2201,6 @@ impl Hub {
         let Some(state) = decode_authoritative_snapshot(&data) else {
             return Ok(false);
         };
-        // Loading now restores such a session in today's canonical form, so
-        // any quarantine for this reason alone is lifted once the preserved
-        // bytes still decode and match the registry.
         if self.validate_authoritative_registry(&state).is_err() {
             return Ok(false);
         }

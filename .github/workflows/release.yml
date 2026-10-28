@@ -409,14 +409,13 @@ jobs:
 
       # Authenticode changes bytes, so replace the bundler's updater signature
       # only after verifying and copying the signed setup.
-      - name: Re-sign the Windows updater after publisher signing
-        if: needs.gate.outputs.signpath == 'true'
-        working-directory: desktop
+      - name: Sign the final Windows bytes for the updater
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: >-
-          pnpm tauri signer sign "../target/release/bundle/nsis/Zephium_${VERSION}_x64-setup.exe"
+          cargo run --locked -p xtask -- sign-windows-updater
+          "target/release/bundle/nsis/Zephium_${VERSION}_x64-setup.exe" "${VERSION}"
 
       - name: Stage release assets
         run: |

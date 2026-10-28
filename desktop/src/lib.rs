@@ -1749,6 +1749,7 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             webext::web_extension_cancel,
             webext::web_extension_list,
             webext::web_extension_set_enabled,
+            webext::web_extension_retry,
             webext::web_extension_uninstall,
             webext::web_extension_answer_access,
             webext::web_extension_set_access,
