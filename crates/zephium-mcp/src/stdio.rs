@@ -163,7 +163,7 @@ impl<R: AsyncRead + Unpin> AsyncRead for Bounded<R> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Bounded, Process, StdioServer};
+    use super::{Bounded, ChildStdout, Process, StdioServer};
     use std::io::Write;
     use std::process::{Command, Stdio};
     use std::time::Duration;
@@ -192,7 +192,7 @@ mod tests {
             .args(["--exact", FIXTURE_TEST, "--ignored", "--nocapture"])
             .env(FIXTURE_ROLE, "descendant")
             .stdin(Stdio::null())
-            .stdout(Stdio::null())
+            .stdout(Stdio::inherit())
             .stderr(Stdio::null())
             .spawn()
             .unwrap();
@@ -200,7 +200,7 @@ mod tests {
         std::io::stdout().flush().unwrap();
     }
 
-    pub(super) async fn orphaned_descendant() -> (Process, u32) {
+    pub(super) async fn orphaned_descendant() -> (Process, u32, BufReader<Bounded<ChildStdout>>) {
         let server = StdioServer {
             program: std::env::current_exe().unwrap(),
             args: ["--exact", FIXTURE_TEST, "--ignored", "--nocapture"]
@@ -234,18 +234,26 @@ mod tests {
                 .unwrap()
                 .success()
         );
-        (process, descendant)
+        (process, descendant, output.into_inner())
     }
 
     #[cfg(unix)]
     #[tokio::test]
-    async fn fixture_leaves_a_descendant_running_after_the_parent_exits() {
-        let (process, descendant) = orphaned_descendant().await;
+    async fn dropping_server_ends_a_descendant_even_after_parent_exits() {
+        let (process, descendant, mut stdout) = orphaned_descendant().await;
         assert_eq!(
             unsafe { libc::kill(i32::try_from(descendant).unwrap(), 0) },
             0
         );
         drop(process);
+        // The sleeping descendant retains stdout until its process exits.
+        tokio::time::timeout(
+            Duration::from_secs(5),
+            tokio::io::copy(&mut stdout, &mut tokio::io::sink()),
+        )
+        .await
+        .expect("descendant survived after Process was dropped")
+        .unwrap();
     }
 
     #[tokio::test]

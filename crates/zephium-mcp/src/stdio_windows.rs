@@ -125,7 +125,7 @@ mod tests {
 
     #[tokio::test]
     async fn dropping_server_ends_a_descendant_even_after_parent_exits() {
-        let (process, pid) = orphaned_descendant().await;
+        let (process, pid, _stdout) = orphaned_descendant().await;
         let descendant = unsafe {
             OpenProcess(
                 PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_SYNCHRONIZE,
