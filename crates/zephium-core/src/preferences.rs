@@ -60,7 +60,14 @@ pub const KEYS: &[&str] = &[
     "time.enabled",
     "work.favourite-models",
     "zoom.default",
+    "privacy.smartscreen",
 ];
+
+/// SmartScreen ships on. Only an explicit persisted false disables the
+/// Windows controller requirement; malformed or missing settings keep it on.
+pub fn smartscreen_required(value: Option<&str>) -> bool {
+    value != Some("false")
+}
 
 /// Pages "Open specific pages" may hold.
 pub const MAX_STARTUP_PAGES: usize = 10;
@@ -293,6 +300,7 @@ pub fn value_allowed(key: &str, value: &str) -> bool {
         | "time.track"
         | "performance.sleep"
         | "updates.auto-check"
+        | "privacy.smartscreen"
         | "focus.breaks" => {
             matches!(value, "true" | "false")
         }
@@ -303,6 +311,18 @@ pub fn value_allowed(key: &str, value: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn smartscreen_defaults_on_and_accepts_only_explicit_boolean_choices() {
+        assert!(KEYS.contains(&"privacy.smartscreen"));
+        for value in [None, Some("true"), Some("off"), Some("")] {
+            assert!(smartscreen_required(value));
+        }
+        assert!(!smartscreen_required(Some("false")));
+        assert!(value_allowed("privacy.smartscreen", "true"));
+        assert!(value_allowed("privacy.smartscreen", "false"));
+        assert!(!value_allowed("privacy.smartscreen", "off"));
+    }
+
     #[test]
     fn performance_preferences_validate_modes_timing_and_normalized_exceptions() {
         for minutes in ["5", "15", "30", "60"] {

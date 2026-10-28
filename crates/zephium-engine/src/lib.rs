@@ -25,6 +25,15 @@ mod layout_queue;
 mod motion_curve;
 mod navigation_epoch;
 mod network;
+#[cfg(any(target_os = "windows", test))]
+mod reputation;
+#[cfg(target_os = "windows")]
+pub use reputation::{
+    configure as configure_windows_reputation_checking,
+    initialize as initialize_windows_reputation_checking, managed as windows_reputation_managed,
+    on_managed as on_windows_reputation_managed,
+};
+
 #[cfg(feature = "agentic-browser")]
 pub mod page_reader;
 mod pane_geometry;

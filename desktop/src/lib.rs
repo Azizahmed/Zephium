@@ -126,6 +126,7 @@ mod voice;
 mod webext;
 #[cfg(all(target_os = "windows", feature = "webext-qa"))]
 mod webext_qa;
+mod windows_privacy;
 #[cfg(feature = "work-product")]
 mod work_activity;
 #[cfg(feature = "work-integration-qa")]
@@ -1803,6 +1804,8 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             launcher_open_accessibility,
             setting_get,
             setting_set,
+            windows_privacy::windows_diagnostics_settings,
+            windows_privacy::windows_reputation_managed,
             ui_info,
             ui_ready,
             menu_popup,
@@ -6479,6 +6482,8 @@ pub fn run() {
                 {
                     let _ = store.set_app_setting(key.into(), value);
                 }
+                #[cfg(target_os = "windows")]
+                windows_privacy::initialize(app.handle(), store.clone());
                 menu_text::set_language(store.app_setting("ui.language").as_deref());
                 updates::schedule_native_checks(app.handle());
                 work_models::install(app.handle());

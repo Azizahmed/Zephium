@@ -60,6 +60,7 @@ const defaults = {
   "time.enabled": "true",
   "work.favourite-models": "",
   "zoom.default": "100",
+  "privacy.smartscreen": "true",
 } as const;
 export type PreferenceKey = keyof typeof defaults;
 const values = $state<Record<PreferenceKey, string>>({ ...defaults });

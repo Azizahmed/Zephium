@@ -35,7 +35,7 @@ jobs:
       - name: Test which changes need which jobs
         run: bash scripts/ci/test_scope.sh
       - name: Test release policy
-        run: python3 -m unittest discover -s scripts/release -p 'test_*.py'
+        run: python3 -m unittest discover -s scripts/release -p 'test_*.py' -v
       - name: actionlint
         run: |
           set -euo pipefail

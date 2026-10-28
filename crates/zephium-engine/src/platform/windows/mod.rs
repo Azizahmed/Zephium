@@ -383,6 +383,7 @@ fn configure_with_credential_denied(
     // Raw content views never use host objects or web messages. Disable the
     // mechanisms in the runtime too, so a future accidental handler cannot
     // silently turn into a bridge.
+    crate::reputation::configure(&core)?;
     let settings = unsafe { core.Settings()? };
     // The PDF viewer has its own Save, Save As and Print surfaces. They do not
     // reliably pass through DownloadStarting, so Settings7 is mandatory for

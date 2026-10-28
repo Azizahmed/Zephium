@@ -3812,5 +3812,19 @@
   "site_data_clear_failed": "Couldn't clear the data of {site}",
   "native_clear_data_for_this_site_more": "Clear Data for This Site…",
   "page_permission_private": "Private windows don't save this choice.",
-  "page_permission_location_off": "Turn on Location Services for Zephium in System Settings › Privacy & Security."
+  "page_permission_location_off": "Turn on Location Services for Zephium in System Settings › Privacy & Security.",
+  "privacy_windows_group": "Microsoft services on Windows",
+  "privacy_smartscreen": "Microsoft Defender SmartScreen",
+  "privacy_smartscreen_launch_unavailable": "SmartScreen is on for this launch because your saved choice could not be read. Restart Zephium to try again.",
+  "privacy_smartscreen_unavailable": "Could not read Windows control status. Reopen Settings to retry.",
+  "privacy_smartscreen_managed": "Managed by Windows or your organization",
+  "privacy_smartscreen_help": "Check sites and downloads for phishing and malware. Can send website addresses and download information to Microsoft for reputation checks. Restart Zephium to apply changes.",
+  "privacy_windows_policy": "SmartScreen is on by default. Windows and organization policies can override this setting.",
+  "privacy_windows_diagnostics": "WebView2 diagnostic data",
+  "privacy_windows_diagnostics_help": "Microsoft Edge WebView2 sends required diagnostic data to Microsoft even when optional diagnostics are off. Manage optional data in Windows.",
+  "privacy_windows_diagnostics_open": "Windows diagnostic settings",
+  "privacy_windows_diagnostics_failed": "Could not open Windows Settings. Open Windows Settings and search for Diagnostics & feedback.",
+  "privacy_microsoft_statement": "Microsoft privacy statement",
+  "privacy_microsoft_statement_help": "Read how Microsoft handles SmartScreen and WebView2 data.",
+  "privacy_microsoft_statement_open": "Read privacy statement"
 }

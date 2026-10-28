@@ -231,7 +231,11 @@ titled by the initiating frame's security-origin host ("example.com says", or
 "An embedded page at … says"). A hidden view, or a window that already shows a
 sheet, gets the dismissed answer, as upstream's no-UI default did. From the
 second dialog within ten seconds the sheet offers to silence the page until its
-URL changes. Messages are bounded to 1,024 characters.
+URL changes. Messages are bounded to 1,024 characters. Message and prompt-default native
+strings are admitted at 2,048 UTF-16 units / 4,096 UTF-8 bytes before a Rust
+copy; oversized values dismiss once. Origin titles, document URLs and prompt
+answers also use native preallocation bounds. Native WebKit may already own
+its input NSString; this prevents duplicating an attacker-sized value in Rust.
 
 `navigation_failure_handler` reduces a failed main-frame navigation's
 `NSURLError` code to a category the host can explain (offline, host not found,
@@ -244,3 +248,40 @@ not reported as one, so the failure lands on the document the person asked for
 and the host can show its own explanation. The handler's `FailedDocument` says
 when that error document replaced the shown page, with the address from Wry's
 in-flight navigation record; macOS always reports `Kept`.
+
+### Independent Windows controller initialization (2026-10-27)
+
+`with_controller_initialization_hook` configures the retained controller before
+WebView initialization and navigation without changing browser-extension
+options. The separate extension startup gate retains its original admission
+role and runs first when present. Either failure follows owned controller cleanup.
+Zephium applies reputation settings through this hook for extension-disabled
+ordinary, private and agent controllers as well as admitted extension contexts.
+Portable callback tests execute OFF-preserving configuration and gate refusal;
+Windows builder tests cover the actual enablement field. The Windows-only native
+`native_controller_hook_applies_reputation_with_extensions_disabled` fixture
+constructs default/private/agent-shaped controllers with requested extensions OFF,
+verifies actual Settings8 reputation readback, and refuses an inert local extension
+install. An extension-enabled control must install that same fixture successfully.
+The resulting environment has no enablement getter, so this native control
+checks admission in addition to the builder option. It requires
+an unmanaged Windows desktop/WebView2 runtime; native execution remains pending here.
+Native Windows/WebView2 execution remains required; cross-target lint with an empty C-object shim is not
+native SDK or device evidence. The upstream revision and dependency graph are
+unchanged, so the application and standalone fork locks retain their versions.
+
+The required standalone formatter exposed pre-existing WebKit whitespace drift;
+only those formatter changes are normalized. The existing eight-argument
+`attach_handlers` registration boundary carries a scoped, Rust 1.77-compatible
+lint allowance with its retained-owner rationale in a comment. It does not use
+`#[expect]` or lint-reason syntax, which require Rust 1.81. Its signature/behavior
+is unchanged and workspace and standalone Clippy retain `-D warnings`.
+
+### Native class bundle identity compatibility (2026-10-27)
+
+The class-origin gate compares bundle pointers as numeric identities. It uses
+a pointer-to-`usize` cast, preserving that comparison under the inherited Rust
+1.77 manifest floor; `pointer.addr()` requires Rust 1.84. No pointer is recreated
+or dereferenced from the integer, and the admission policy is unchanged.
+The dependency graph and locked upstream versions remain unchanged. Strict
+standalone validation uses the manifest's default MSRV with no lint overrides.

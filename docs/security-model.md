@@ -29,30 +29,36 @@ Chromium's full site-isolation model.
    page-world bootstraps for discard-safety observation, bounded HTML extraction, and
    scripted-print denial. Those scripts expose no native bridge or application
    authority; all injected page-world code has exactly the page's trust level.
-4. **Extension execution (unprivileged; ordinary-product-disabled).** The architecture reserves
-   one non-reusable native principal per installed extension. Content scripts may run
+4. **Extension execution (unprivileged; managed ordinary profiles).** Ordinary startup
+   attempts to restore the installed, enabled cohorts of persistent profiles through
+   their managed native adapters. Successful native admission enables those cohorts;
+   unsupported profiles, unavailable interfaces or failed admission keep them
+   unavailable. Private and agent contexts do not inherit an ordinary cohort. Each
+   installed extension uses one non-reusable native principal. Content scripts may run
    only in engine-provided isolated worlds scoped to that principal. Extension-owned
    background and UI surfaces do not inherit application-WebView privilege and receive
    neither generic Tauri/Wry IPC nor a generic custom protocol. Any enabled native
    registration must bind the profile, install, principal, and generation and never
    accept identity from a JavaScript payload; only capability-specific,
-   permission-checked brokers may cross into zone 1. This is the required enablement
-   contract, not a current product claim: production adapters remain disabled until
-   platform-native hostile tests enforce it. A manifest-declared extension sandbox is
+   permission-checked brokers may cross into zone 1. These are the current managed
+   adapter boundaries. Platform admission and additional compatibility/provisioning
+   paths remain separately gated and require platform-native qualification. A
+   manifest-declared extension sandbox is
    not itself a fifth trust zone on macOS: the live WKWebExtension gate proves such a
    page retains its `webkit-extension` origin and `chrome` API, even when its extension
    URL is placed in an explicit `sandbox="allow-scripts"` iframe. A separate live gate
    proves the permitted replacement primitive: an authenticated content script fetches
    a public inert payload and instantiates it through a Blob-backed `allow-scripts`
    frame whose message origin is `null`, whose extension APIs are absent, and whose DOM
-   is inaccessible to the parent. Product provisioning remains disabled until the
-   pinned package deterministically adopts that topology and its authenticated message
+   is inaccessible to the parent. This separate sandbox-compatibility provisioning
+   path remains disabled until its pinned package deterministically adopts that
+   topology and its authenticated message
    flow passes hostile tests. Native naming, CSP text, or the `sandbox` attribute alone
    is never accepted as isolation evidence.
 
-   The explicit macOS staging build is the sole current exception to ordinary
-   product provisioning, not an exception to this trust boundary. It uses an
-   isolated bundle identifier and fixed embedded catalog transport. Extension
+   The explicit macOS staging build uses an isolated bundle identifier and fixed
+   embedded catalog transport for its additional provisioning/qualification paths.
+   Extension
    action popups and settings views are native WKWebExtension surfaces with no
    application bridge. An options view admits only its exact extension origin;
    programmatic remote navigation is cancelled, while a user-activated HTTP(S)
@@ -905,8 +911,9 @@ call, and exposes neither bindings nor raw repository mutation over its
 mailbox. Internal-only authenticated tests exercise that boundary through
 activation, exact retirement, profile retirement, shutdown, and post-drain
 Store/repository reopen while denying stale authority. They use a bounded
-native fake; production adapters remain disabled, so the low-level and service
-APIs are still not a release-enablement claim.
+native fake. These structural tests do not qualify ordinary native adapters;
+release enablement still requires the platform and lifecycle evidence described
+below.
 
 Logical content views have a warm set and two watermarks. The most recently used hidden
 pages (four by default, two to save memory, ten to keep tabs ready) stay resident; every
@@ -1220,13 +1227,25 @@ These inherited properties must not be overstated:
   journal-authorized profile database. Cookie inspection/editing and origin-selective
   clearing are not implemented, and the full-profile coordinator still requires the
   packaged native data-type/crash matrix described in the release gates.
-- "Zero telemetry" currently means no first-party Zephium telemetry client is wired
-  into this tree. It does not mean pages make no requests or that OS WebViews and
-  services make no vendor requests. For example, WebView2 content protection remains
-  enabled and may follow Microsoft/OS policy. Zephium configures custom crash
-  reporting to prevent WebView2's automatic crash upload; this does not disable
-  separately governed required diagnostics or SmartScreen. A production privacy claim needs a
-  platform-by-platform traffic audit.
+- Zephium has no first-party browsing telemetry client. On Windows, Microsoft
+  Edge WebView2 still collects required diagnostic data regardless of the Windows
+  optional diagnostic-data setting. Optional collection follows Windows Settings
+  → Privacy (Windows 10) or Privacy & security (Windows 11) → Diagnostics & feedback,
+  and organization policy.
+  Settings → Privacy links to that fixed system pane. Zephium configures custom
+  crash reporting to prevent WebView2's automatic crash uploads; that does not
+  disable required diagnostics. Microsoft Defender SmartScreen is on by default
+  and can send website addresses and download information to Microsoft for reputation
+  checks. The Windows-only Privacy switch persists a restart-required choice;
+  it does not claim to change required diagnostics. Windows/organization policy
+  may independently override SmartScreen. Default ON uses WebView2's native
+  default without requiring Settings8. Only explicit OFF is set and read back;
+  API failure or refusal keeps browsing available and marks the switch managed.
+  Unavailable or slow startup preference reads retain ON for that launch; Settings
+  shows read-only ON with a local-read explanation until restart. See [Microsoft's WebView2 data and
+  privacy documentation](https://learn.microsoft.com/en-us/microsoft-edge/webview2/concepts/data-privacy)
+  and [Settings8's reputation-checking contract](https://learn.microsoft.com/en-us/microsoft-edge/webview2/reference/win32/icorewebview2settings8).
+  These controls do not establish a platform traffic audit.
 - A sandbox limits impact; it does not make engine vulnerabilities impossible. Native
   engine security updates are part of the product's security boundary.
 - Hard runtime admission, recommended maintenance, and review age are separate
@@ -1255,9 +1274,12 @@ These inherited properties must not be overstated:
 
 ### Windows / WebView2
 
-- Browser extensions remain disabled in every ordinary WebView2 environment.
+- Ordinary startup restores authenticated extension cohorts for persistent
+  profiles through the managed extension lifecycle. Profiles without an admitted
+  cohort remain extension-disabled;
+  private and agent environments do not inherit ordinary extensions.
   A direct `browser_extensions_enabled(true)` request and every unmanaged
-  extension path fail before COM/HWND construction. The only enabled path is
+  extension path fail before COM/HWND construction. The enabled path is
   an engine-owned Wry startup gate invoked after exact controller retention but
   before WebView initialization or initial navigation. It pointer-attests the
   controller environment through canonical `IUnknown` identity, the exact UDF,
@@ -1327,7 +1349,16 @@ These inherited properties must not be overstated:
   and default context menus and requires Settings7 to hide PDF Save, Save As, and Print.
   Privileged downloads remain denied; raw human views use the native download adapter. Both view classes replace Wry's
   broader default browser arguments with only the `msWebOOUI`/`msPdfOOUI` suppressions,
-  so Zephium does not deliberately disable SmartScreen.
+  so browser arguments do not disable SmartScreen. One preference is captured
+  before controller construction; changing it requires restarting Zephium.
+  Default ON keeps WebView2's own default without querying Settings8. Only explicit
+  OFF requests `IsReputationCheckingRequired = false` and reads it back on raw,
+  agent, extension-host, extension-popup and privileged controllers. Missing API
+  support, readback failure or policy refusal keeps browsing available and marks
+  the switch managed. Applying OFF to every controller matters because a shared
+  UDF keeps SmartScreen on while any controller requires it. Readback verifies the
+  requested controller value; Windows/organization policy governs the effective
+  service.
 - Every view also requires CoreWebView2_18. Raw and privileged subframe navigations are
   checked by native handlers, and OS-registered external URI schemes are always
   cancelled. Client-certificate selection is also cancelled before WebView2 can fall

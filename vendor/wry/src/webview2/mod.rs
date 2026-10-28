@@ -1132,7 +1132,9 @@ impl InnerWebView {
       Err(error) => return Err(construction.finish_failure(error)),
     };
     construction.retain_controller(&controller);
-    if let Some(startup_gate) = &pl_attrs.browser_extension_startup_gate {
+    if pl_attrs.browser_extension_startup_gate.is_some()
+      || pl_attrs.controller_initialization_hook.is_some()
+    {
       let core = unsafe { controller.CoreWebView2() }
         .map_err(webview2_com::Error::WindowsError)
         .map_err(Error::WebView2Error);
@@ -1140,7 +1142,12 @@ impl InnerWebView {
         Ok(core) => core,
         Err(error) => return Err(construction.finish_failure(error)),
       };
-      if let Err(error) = startup_gate(&env, &core) {
+      if let Err(error) = crate::native_controller_init::run(
+        &env,
+        &core,
+        pl_attrs.browser_extension_startup_gate.as_deref(),
+        pl_attrs.controller_initialization_hook.as_deref(),
+      ) {
         return Err(construction.finish_failure(Error::WebView2Error(
           webview2_com::Error::WindowsError(error),
         )));
@@ -1585,7 +1592,9 @@ impl InnerWebView {
           // A persisted decision would outlive this broker's policy and
           // suppress later requests, so nothing set here is saved; only the
           // person's own answer to the native prompt may be, below.
-          let args3 = args.cast::<ICoreWebView2PermissionRequestedEventArgs3>().ok();
+          let args3 = args
+            .cast::<ICoreWebView2PermissionRequestedEventArgs3>()
+            .ok();
           if let Some(args3) = &args3 {
             let _ = args3.SetSavesInProfile(false);
           }
@@ -1781,6 +1790,8 @@ impl InnerWebView {
   }
 
   #[inline]
+  // Native registration keeps distinct controller, navigation and cleanup owners.
+  #[allow(clippy::too_many_arguments)]
   unsafe fn attach_handlers(
     hwnd: HWND,
     controller: &ICoreWebView2Controller,

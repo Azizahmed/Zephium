@@ -343,6 +343,13 @@ export const fields = {
     description: m.pref_search_engines_help,
     initial: "",
   },
+  "privacy.smartscreen": {
+    section: "privacy",
+    windowsOnly: true,
+    label: m.privacy_smartscreen,
+    description: m.privacy_smartscreen_help,
+    initial: true,
+  },
   "privacy.blocking": {
     section: "privacy",
     label: m.pref_privacy_blocking,
