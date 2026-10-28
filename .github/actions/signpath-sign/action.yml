@@ -44,11 +44,19 @@ runs:
         parameters: |
           version: ${{ toJSON(steps.request.outputs.version) }}
     - name: Verify signed output before resuming packaging
-      timeout-minutes: 5
       shell: pwsh
       env:
         SIGNING_ROLE: ${{ inputs.role }}
         SIGNING_REQUEST_URL: ${{ steps.sign.outputs.signing-request-web-url }}
       run: |
-        ./scripts/release/signpath.ps1 -Operation Complete -Role $env:SIGNING_ROLE
+        # Composite steps do not support timeout-minutes. Bound the verifier
+        # process itself so Windows trust/network stalls fail closed.
+        $script = (Resolve-Path ./scripts/release/signpath.ps1).Path
+        $arguments = @('-NoProfile', '-NonInteractive', '-File', ('"' + $script + '"'), '-Operation', 'Complete', '-Role', $env:SIGNING_ROLE)
+        $verify = Start-Process -FilePath (Get-Command pwsh).Source -ArgumentList $arguments -NoNewWindow -PassThru
+        if (!$verify.WaitForExit(300000)) {
+          $verify.Kill($true)
+          throw 'Signed artifact verification timed out'
+        }
+        if ($verify.ExitCode -ne 0) { throw "Signed artifact verification failed ($($verify.ExitCode))" }
         "- $($env:SIGNING_ROLE): $($env:SIGNING_REQUEST_URL)" >> $env:GITHUB_STEP_SUMMARY
